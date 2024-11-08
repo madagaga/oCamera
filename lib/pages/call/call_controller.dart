@@ -15,13 +15,15 @@ class CallController extends GetxController {
   /// The associated Signaling service.
   final SignalingService _signalingService = Get.find();
 
-  Device? target;
-  RxBool enableVideo = false.obs;
+  Rx<Device> target = Rx<Device>(Device('--', '---', '---', true));
+  RxBool enableVideo = true.obs;
   RxBool enableAudio = true.obs;
   RxBool connected = false.obs;
   RxString error = ''.obs;
+
   bool isIncomingCall = false;
   bool enableVideoButton = false;
+  bool hangedUp = false;
 
   final GlobalKey videoRenderKey = GlobalKey();
 
@@ -39,24 +41,27 @@ class CallController extends GetxController {
   @override
   Future<void> onInit() async {
     _initializeSignaling();
-    _initializeArguments();
-    await _initializeAudio();
-
+    await _initializePeer();
     super.onInit();
+  }
+
+  @override
+  void onClose() {
+    hangup();
+    remoteRTCVideoRenderer.dispose();
+    super.dispose();
   }
 
   void _initializeArguments() {
     if (Get.arguments != null && Get.arguments is List) {
       List args = Get.arguments;
-      for (var element in args) {
-        if (element is Device) {
-          target = element;
-          _createOffer();
-        } else if (element is bool) {
-          enableVideo.value = element;
-        } else if (element is SdpPacket) {
-          _onOfferReceived(element);
-        }
+      if (args[0] is Device) {
+        target.value = args[0];
+        _createOffer();
+      } else if (args[0] is SdpPacket) {
+        target.value = args[1];
+        isIncomingCall = true;
+        _onOfferReceived(args[0]);
       }
     }
   }
@@ -94,27 +99,38 @@ class CallController extends GetxController {
 
     _rtcPeerConnection!.onIceCandidate = (webrtc.RTCIceCandidate candidate) => {
           if (candidate.candidate != null)
-            _signalingService.sendIceCandidate(target!.id, candidate)
+            _signalingService.sendIceCandidate(target.value.id, candidate)
           else
             print("ice empty")
         };
 
     _rtcPeerConnection!.onConnectionState =
-        (webrtc.RTCPeerConnectionState state) => {
-              if (state ==
-                  webrtc.RTCPeerConnectionState
-                      .RTCPeerConnectionStateDisconnected)
-                {hangup()}
-              else if (state ==
-                  webrtc.RTCPeerConnectionState.RTCPeerConnectionStateConnected)
-                {print('Connected'), connected.value = true}
-            };
+        (webrtc.RTCPeerConnectionState state) {
+      print(' ********** $state');
+      switch (state) {
+        case webrtc.RTCPeerConnectionState.RTCPeerConnectionStateConnecting:
+          break;
+        case webrtc.RTCPeerConnectionState.RTCPeerConnectionStateConnected:
+          connected.value = true;
+          enableVideoButton = !isIncomingCall && target.value.type != "sender";
+        case webrtc.RTCPeerConnectionState.RTCPeerConnectionStateFailed:
+        case webrtc.RTCPeerConnectionState.RTCPeerConnectionStateDisconnected:
+          hangup();
+          break;
+        default:
+          break;
+      }
+    };
 
     _rtcPeerConnection!.onAddStream = (stream) {
       _remoteStream = stream;
       remoteRTCVideoRenderer.srcObject = _remoteStream;
-      enableVideoButton = !isIncomingCall && target?.type != "sender";
+      // enableVideoButton =
+      //     !isIncomingCall.value && target.value.type != "sender";
     };
+
+    _initializeArguments();
+    await _initializeAudio();
   }
 
   webrtc.RTCSessionDescription setBandwidthLimit(
@@ -134,17 +150,13 @@ class CallController extends GetxController {
 
   Future<void> _createOffer() async {
     await remoteRTCVideoRenderer.initialize();
-    await _initializePeer();
     webrtc.RTCSessionDescription offer = await _rtcPeerConnection!.createOffer({
-      'mandatory': {
-        'OfferToReceiveAudio': true,
-        'OfferToReceiveVideo': enableVideo.value
-      }
+      'mandatory': {'OfferToReceiveAudio': true, 'OfferToReceiveVideo': true}
     });
-    offer = setBandwidthLimit(offer);
+    //offer = setBandwidthLimit(offer);
 
     await _rtcPeerConnection!.setLocalDescription(offer);
-    _signalingService.sendSDP(target!.id, offer);
+    _signalingService.sendSDP(target.value.id, offer);
   }
 
   void _onAnswerReceived(SdpPacket packet) async {
@@ -152,30 +164,26 @@ class CallController extends GetxController {
   }
 
   void _onOfferReceived(SdpPacket packet) async {
-    target = Device(packet.source, packet.source, '', true);
-    isIncomingCall = true;
-
-    await _initializePeer();
-
 // set SDP offer as remoteDescription for peerConnection
     await _rtcPeerConnection!.setRemoteDescription(
       packet.sdp,
     );
 
     // check if video should be enabled
-    enableVideo.value = packet.sdp.sdp!.contains('m=video');
+    //enableVideo.value = packet.sdp.sdp!.contains('m=video');
 
     await _initializeStream();
+
     // create SDP answer
     webrtc.RTCSessionDescription answer =
         await _rtcPeerConnection!.createAnswer();
 
-    answer = setBandwidthLimit(answer);
+    //answer = setBandwidthLimit(answer);
 
     // set SDP answer as localDescription for peerConnection
     _rtcPeerConnection!.setLocalDescription(answer);
 
-    _signalingService.sendSDP(target!.id, answer);
+    _signalingService.sendSDP(target.value.id, answer);
   }
 
   void _onIceCandidateReceived(IcePacket packet) {
@@ -216,6 +224,8 @@ class CallController extends GetxController {
   }
 
   void hangup() {
+    if (hangedUp) return;
+
     if (_localStream != null) {
       _localStream!.getTracks().forEach((track) {
         track.stop();
@@ -225,24 +235,26 @@ class CallController extends GetxController {
     }
 
     if (_remoteStream != null) {
-      _remoteStream!.getTracks().forEach((track) {
-        track.stop();
+      captureSnapshot().then((onValue) {
+        _remoteStream!.getTracks().forEach((track) {
+          track.stop();
+        });
+        _remoteStream!.dispose();
+        _remoteStream = null;
       });
-      _remoteStream!.dispose();
-      _remoteStream = null;
     }
 
     if (_rtcPeerConnection != null) {
       _rtcPeerConnection!.close();
       _rtcPeerConnection = null;
     }
-    if (target != null) {
-      _signalingService.hangup(target!.id);
-      target = null;
+    if (target.value.id != '') {
+      _signalingService.hangup(target.value.id);
     }
 
-    remoteRTCVideoRenderer.dispose();
+    //remoteRTCVideoRenderer.dispose();
     connected.value = false;
+    hangedUp = true;
     Get.back();
   }
 
@@ -280,7 +292,7 @@ class CallController extends GetxController {
   }
 
   void remoteSwitchCamera() {
-    _signalingService.flipCamera(target!.id);
+    _signalingService.flipCamera(target.value.id);
   }
 
   void toggleAudio() {
@@ -302,7 +314,7 @@ class CallController extends GetxController {
         Uint8List pngBytes = byteData!.buffer.asUint8List();
 
         // Save the image to the device's documents directory
-        target?.snapshot = pngBytes;
+        target.value.snapshot = pngBytes;
         print('Snapshot saved');
       } else {
         print('VideoRenderKey is not set or context is null');

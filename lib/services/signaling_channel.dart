@@ -60,7 +60,7 @@ class SignalingService {
 
   SignalingService() {
     /// Set logging on if needed, defaults to off
-    _client.logging(on: true);
+    //_client.logging(on: true);
 
     /// Set the correct MQTT protocol for mosquito
     _client.setProtocolV311();
@@ -84,7 +84,7 @@ class SignalingService {
       _currentUser.broker = user.broker;
 
       _currentDevice.id = user.id;
-      _currentDevice.name = user.name;
+      _currentDevice.name = user.deviceName;
       _currentDevice.type = 'smartphone';
     }
 
@@ -123,23 +123,23 @@ class SignalingService {
       _client.subscribe('/${_currentUser.id}', MqttQos.atLeastOnce);
     } on Exception catch (e) {
       _onConnected!(false);
-      print('client exception - $e');
+      print('[MQTT] : client exception - $e');
       _client.disconnect();
     }
 
     // when connected, print a confirmation, else print an error
     if (_client.connectionStatus?.state == MqttConnectionState.connected) {
-      print('client connected');
+      print('[MQTT] : client connected');
     } else {
       print(
-          'ERROR client connection failed - disconnecting, status is ${_client.connectionStatus}');
+          '[MQTT] : ERROR client connection failed - disconnecting, status is ${_client.connectionStatus}');
       _client.disconnect();
     }
   }
 
   void _onClientConnected() {
     try {
-      print('connected');
+      print('[MQTT] : connected');
       heartBeat(true);
 
       streamSubscription ??= _client.updates!.listen(_onNewMessageReceived);
@@ -153,7 +153,7 @@ class SignalingService {
   }
 
   void _onClientDisconnected() {
-    print('disconnected');
+    print('[MQTT] : disconnected');
   }
 
   void _onNewMessageReceived(List<MqttReceivedMessage<MqttMessage?>>? c) {
@@ -167,13 +167,14 @@ class SignalingService {
       final pt =
           MqttPublishPayload.bytesToStringAsString(recMess.payload.message);
       final data = jsonDecode(pt);
+
       if (data['source'] == _currentUser.id) {
+        print('[MQTT] :  ignoring echo');
         return;
       }
 
       print(
-          'MQTT_LOGS:: New data arrived: topic is <${c[0].topic}>, payload is $pt');
-      print('');
+          '[MQTT] : New data arrived: topic is <${c[0].topic}>, payload is $pt');
 
       switch (data['type'] as String) {
         case 'sdp':
@@ -219,7 +220,7 @@ class SignalingService {
           }
 
           final Map<String, dynamic> jsonData = data['data'];
-          Device u = Device.fromJson(jsonData);
+          Device u = Device.fromJson(jsonData, false);
           _onNewDeviceFound!(u);
 
         case 'query':
@@ -232,13 +233,14 @@ class SignalingService {
 
   void heartBeat(bool online) async {
     _currentDevice.online = online;
-    final pkt = {'type': 'device', 'data': _currentDevice.toJson()};
+    final pkt = {'type': 'device', 'data': _currentDevice.toJson(false)};
     _send('/devices', pkt);
   }
 
   void _send(String channel, Map<String, dynamic> data) {
     data['source'] = _currentUser.id;
     final builder1 = MqttClientPayloadBuilder();
+    print('[MQTT] : Sending message to $channel : $data');
     builder1.addString(jsonEncode(data));
     if (_client.connectionStatus!.state == MqttConnectionState.connected) {
       _client.publishMessage(channel, MqttQos.atLeastOnce, builder1.payload!);

@@ -3,6 +3,7 @@ class User {
   String name = '';
   String password = '';
   String broker = '';
+  String deviceName = '';
 
   User();
 
@@ -11,10 +12,11 @@ class User {
     name = data['name'];
     password = data['password'];
     broker = data['broker'];
+    deviceName = data['deviceName'];
   }
 
   Map<String, dynamic> toJson() =>
-      {'name': name, 'id': id, 'password': password, 'broker': broker};
+      {'name': name, 'id': id, 'password': password, 'broker': broker, 'deviceName': deviceName};
 
   bool isValid() {
     if (id.isEmpty || name.isEmpty || password.isEmpty || broker.isEmpty) {

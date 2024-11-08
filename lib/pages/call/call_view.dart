@@ -16,24 +16,23 @@ class CallView extends GetView<CallController> {
         child: Scaffold(
           backgroundColor: Colors.black,
           appBar: AppBar(
-            backgroundColor: Colors.black,
-            foregroundColor: Colors.white,
-            title: Text(
-                "${controller.isIncomingCall ? 'Call from' : 'Calling'} : ${controller.target!.name}"),
-          ),
+              backgroundColor: Colors.black,
+              foregroundColor: Colors.white,
+              title: Obx(
+                () => Text(
+                    "${controller.isIncomingCall ? 'Call from' : 'Calling'} : ${controller.target.value.name}"),
+              )),
           body: SafeArea(
             child: Column(
               children: [
                 Expanded(
-                  child: Stack(children: [
-                    RepaintBoundary(
-                      key: controller.videoRenderKey,
-                      child: RTCVideoView(
-                        controller.remoteRTCVideoRenderer,
+                  child: RepaintBoundary(
+                    key: controller.videoRenderKey,
+                    child: RTCVideoView(
+                      controller.remoteRTCVideoRenderer,
 //                  objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                      ),
                     ),
-                  ]),
+                  ),
                 ),
                 Obx(() => Visibility(
                     visible: !controller.connected.value,
@@ -59,14 +58,13 @@ class CallView extends GetView<CallController> {
                               color: Colors.white,
                               onPressed: controller.remoteSwitchCamera,
                             ),
-                          if (controller.enableVideoButton)
-                            Obx(() => IconButton(
-                                  icon: Icon(controller.enableAudio.value
-                                      ? Icons.speaker
-                                      : Icons.speaker_notes_off),
-                                  color: Colors.white,
-                                  onPressed: controller.toggleAudio,
-                                )),
+                          Obx(() => IconButton(
+                                icon: Icon(controller.enableAudio.value
+                                    ? Icons.volume_up
+                                    : Icons.volume_off),
+                                color: Colors.white,
+                                onPressed: controller.toggleAudio,
+                              )),
                           if (controller.enableVideoButton)
                             Obx(() => IconButton(
                                   icon: Icon(controller.enableVideo.value

@@ -11,12 +11,14 @@ class LoginController extends GetxController {
   ///  The controller constructor.
   LoginController();
 
-  Future<void> saveUserData(String name, String password, String broker) async {
+  Future<void> saveUserData(
+      String name, String password, String broker, String deviceName) async {
     final storage = GetStorage();
     userData.id = DateTime.now().millisecondsSinceEpoch.toString();
     userData.name = name;
     userData.password = password;
     userData.broker = broker;
+    userData.deviceName = deviceName;
 
     await storage.write('currentUser', jsonEncode(userData.toJson()));
     Get.offAndToNamed(Routes.LOADING);

@@ -3,6 +3,7 @@ import 'dart:async';
 
 import 'package:permission_handler/permission_handler.dart';
 import 'package:rtc/models/user.dart';
+import 'package:rtc/models/devices.dart';
 import 'package:rtc/pages/loading/loading_controller.dart';
 import 'package:rtc/services/signaling_channel.dart';
 import 'package:flutter/material.dart';
@@ -17,7 +18,7 @@ void main() async {
   await _initializePermissions();
   await _initializeServices();
 
-  runApp(OcameraApp());
+  runApp(const OcameraApp());
 }
 
 Future<void> _initializePermissions() async {
@@ -28,15 +29,30 @@ Future<void> _initializePermissions() async {
 
 /// This function initializes all services used in the application.
 Future _initializeServices() async {
-  // This logger service YaLogger MUST be implemented BEFORE every services & repositories because they depends of it.
   final storage = GetStorage();
   String? data = storage.read<String>('currentUser');
-  User current = User();
+  // load user
+  User currentUser = User();
   if (data != null) {
     dynamic jsonData = jsonDecode(data);
-    current = User.fromJson(jsonData);
+    currentUser = User.fromJson(jsonData);
   }
-  Get.put(current, permanent: true);
+  Get.put(currentUser, permanent: true);
+
+  Map<String, Device> devices = {};
+
+  if (currentUser.id != '') {
+    // load devices
+    data = storage.read<String>('devices');
+    if (data != null) {
+      dynamic jsonData = jsonDecode(data);
+      for (var item in jsonData) {
+        devices[item['id']] = Device.fromJson(item, true);
+      }
+    }
+  }
+  Get.put(devices, permanent: true);
+
   Get.put(SignalingService(), permanent: true);
 }
 

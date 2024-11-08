@@ -2,11 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:rtc/pages/login/login_controller.dart';
 
-/// This class is the view for the [Home] page.
+/// This class is the view for the [Login] page.
 class LoginView extends GetView<LoginController> {
   LoginView({super.key});
 
   final _formKey = GlobalKey<FormState>();
+  final TextEditingController nameController = TextEditingController();
   final TextEditingController loginController = TextEditingController();
   final TextEditingController passwordController = TextEditingController();
   final TextEditingController brokerController = TextEditingController(
@@ -28,6 +29,21 @@ class LoginView extends GetView<LoginController> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 16),
+                child: TextFormField(
+                  controller: nameController,
+                  decoration: const InputDecoration(
+                      border: OutlineInputBorder(), labelText: "Device name"),
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Please enter an unique name';
+                    }
+                    return null;
+                  },
+                ),
+              ),
               Padding(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 8, vertical: 16),
@@ -82,8 +98,11 @@ class LoginView extends GetView<LoginController> {
                   child: ElevatedButton(
                     onPressed: () {
                       if (_formKey.currentState!.validate()) {
-                        controller.saveUserData(loginController.text,
-                            passwordController.text, brokerController.text);
+                        controller.saveUserData(
+                            loginController.text,
+                            passwordController.text,
+                            brokerController.text,
+                            nameController.text);
                         // Navigate the user to the Home page
                       } else {
                         ScaffoldMessenger.of(context).showSnackBar(
