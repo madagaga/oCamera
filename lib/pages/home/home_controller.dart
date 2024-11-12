@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:get/get.dart';
 import 'package:get_storage/get_storage.dart';
 import 'package:rtc/models/devices.dart';
@@ -7,25 +5,28 @@ import 'package:rtc/models/sdp_packet.dart';
 import 'package:rtc/models/user.dart';
 import 'package:rtc/routes/app_pages.dart';
 import 'package:rtc/services/signaling_channel.dart';
+import 'package:rtc/services/storage_service.dart';
 
 class HomeController extends GetxController {
   RxMap<String, Device> devices = RxMap<String, Device>(Get.find());
 
   /// The associated Signaling service.
   SignalingService signalingService = Get.find();
+  StorageService storageService = Get.find();
   User currentUser = Get.find();
 
   ///  The controller constructor.
   HomeController() {
     signalingService.onNewDeviceFound = _onNewDeviceFound;
     signalingService.onOfferReceived = _onOfferReceived;
-    getDevices();
   }
 
-@override
-Future<void> onInit () async {
-    final storage = GetStorage();
-    storage.write('devices', jsonEncode(devices.toJson()));
+  Future<void> onResumed() async {
+    if (devices.length > 0) {
+      storageService.saveDevices(devices);
+    } else {
+      getDevices();
+    }
     super.onInit();
   }
 
@@ -44,6 +45,7 @@ Future<void> onInit () async {
       devices[d.id]?.online = d.online;
       devices[d.id]?.streaming = d.streaming;
     }
+    devices.refresh();
   }
 
   void _onOfferReceived(SdpPacket packet) {

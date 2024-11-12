@@ -1,14 +1,12 @@
-import 'dart:convert';
 import 'dart:async';
 
 import 'package:permission_handler/permission_handler.dart';
-import 'package:rtc/models/user.dart';
-import 'package:rtc/models/devices.dart';
 import 'package:rtc/pages/loading/loading_controller.dart';
 import 'package:rtc/services/signaling_channel.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:get_storage/get_storage.dart';
+import 'package:rtc/services/storage_service.dart';
 
 import 'routes/app_pages.dart';
 
@@ -29,30 +27,14 @@ Future<void> _initializePermissions() async {
 
 /// This function initializes all services used in the application.
 Future _initializeServices() async {
-  final storage = GetStorage();
-  String? data = storage.read<String>('currentUser');
+  StorageService storageService = StorageService();
+
   // load user
-  User currentUser = User();
-  if (data != null) {
-    dynamic jsonData = jsonDecode(data);
-    currentUser = User.fromJson(jsonData);
-  }
-  Get.put(currentUser, permanent: true);
+  Get.put(storageService.loadUser(), permanent: true);
 
-  Map<String, Device> devices = {};
+  Get.put(storageService.loadDevices(), permanent: true);
 
-  if (currentUser.id != '') {
-    // load devices
-    data = storage.read<String>('devices');
-    if (data != null) {
-      dynamic jsonData = jsonDecode(data);
-      for (var item in jsonData) {
-        devices[item['id']] = Device.fromJson(item, true);
-      }
-    }
-  }
-  Get.put(devices, permanent: true);
-
+  Get.put(storageService, permanent: true);
   Get.put(SignalingService(), permanent: true);
 }
 
@@ -79,10 +61,12 @@ class _AppState extends State<OcameraApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.detached ||
-        state == AppLifecycleState.paused) {
+    if (state == AppLifecycleState.detached) {
       // Send a specific message before the app closes or goes into the background
       Get.find<SignalingService>().heartBeat(false);
+    } else if (state == AppLifecycleState.resumed) {
+      // Send a specific message when the app is brought back to the foreground
+      Get.find<SignalingService>().heartBeat(true);
     }
   }
 
