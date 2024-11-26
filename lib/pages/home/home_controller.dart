@@ -22,8 +22,9 @@ class HomeController extends GetxController {
   }
 
   Future<void> onResumed() async {
-    if (devices.length > 0) {
+    if (devices.isNotEmpty) {
       storageService.saveDevices(devices);
+      devices.refresh();
     } else {
       getDevices();
     }

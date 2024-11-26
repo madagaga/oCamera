@@ -26,11 +26,18 @@ class CallView extends GetView<CallController> {
             child: Column(
               children: [
                 Expanded(
-                  child: RepaintBoundary(
-                    key: controller.videoRenderKey,
-                    child: RTCVideoView(
-                      controller.remoteRTCVideoRenderer,
+                  child: InteractiveViewer(
+                    minScale: 1.0,
+                    maxScale: 4.0,
+                    boundaryMargin: const EdgeInsets.all(20),
+                    panEnabled: true,
+                    scaleEnabled: true,
+                    child: RepaintBoundary(
+                      key: controller.videoRenderKey,
+                      child: RTCVideoView(
+                        controller.remoteRTCVideoRenderer,
 //                  objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                      ),
                     ),
                   ),
                 ),
