@@ -7,66 +7,124 @@ class LoadingView extends GetView<LoadingController> {
 
   @override
   Widget build(BuildContext context) {
-  return Scaffold(
-    appBar: AppBar(
-        title: const Text("Authenticating"),
-        foregroundColor: Colors.white,
-        backgroundColor: Colors.indigo,
-      ),
-    body: InkWell(
-      child: Stack(
-        fit: StackFit.expand,
-        children: <Widget>[
-          /// Paint the area where the inner widgets are loaded with the
-          /// background to keep consistency with the screen background
-          Container(
-            //decoration: const BoxDecoration(color: Colors.black),
+    final size = MediaQuery.of(context).size;
+    
+    return Scaffold(
+      resizeToAvoidBottomInset: false,
+      body: Container(
+        height: MediaQuery.of(context).size.height,
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.indigo.shade800,
+              Colors.indigo.shade500,
+            ],
           ),
-          /// Render the background image
-          // Container(
-          //   child: Image.asset(‘assets/somebackground.png’, fit: BoxFit.cover),
-          // ),
-          /// Render the Title widget, loader and messages below each other
-          const Column(
-            mainAxisAlignment: MainAxisAlignment.start,
-            children: <Widget>[
-              Expanded(
-                flex: 3,
-                
-                    child:   Column(
-                      mainAxisAlignment: MainAxisAlignment.start,
-                      children: <Widget>[
-                         Padding(
-                          padding: EdgeInsets.only(top: 30.0),
+        ),
+        child: SafeArea(
+          child: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                // App Logo/Icon
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.1),
+                        blurRadius: 10,
+                        spreadRadius: 2,
+                      ),
+                    ],
+                  ),
+                  child: const Icon(
+                    Icons.videocam,
+                    size: 60,
+                    color: Colors.indigo,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                // App Title
+                const Text(
+                  "oCamera",
+                  style: TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 60),
+                // Loading Card
+                Container(
+                  width: size.width * 0.85,
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.1),
+                        blurRadius: 10,
+                        spreadRadius: 2,
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    children: [
+                      const Text(
+                        "Authenticating",
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.indigo,
                         ),
-                        Text("Connecting to broker"),
-                      ],
-                    ),
-              ),
-              Expanded(
-                flex: 1,
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: <Widget>[
-                    /// Loader Animation Widget
-                    CircularProgressIndicator(
-                      valueColor:  AlwaysStoppedAnimation<Color>(
-                          Colors.green),
-                    ),
-                    Padding(
-                      padding: EdgeInsets.only(top: 20.0),
-                    ),
-                    Text("Please wait"),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        "Connecting to broker",
+                        style: TextStyle(
+                          fontSize: 16,
+                          color: Colors.grey,
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      // Loader Animation
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.indigo.withOpacity(0.05),
+                          borderRadius: BorderRadius.circular(100),
+                        ),
+                        child: const SizedBox(
+                          width: 50,
+                          height: 50,
+                          child: CircularProgressIndicator(
+                            valueColor: AlwaysStoppedAnimation<Color>(Colors.indigo),
+                            strokeWidth: 4,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      const Text(
+                        "Please wait while we connect you",
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey,
+                        ),
+                      ),
                     ],
                   ),
                 ),
               ],
             ),
-          ],
+          ),
         ),
       ),
     );
   }
 }
-
-

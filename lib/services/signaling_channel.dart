@@ -111,7 +111,7 @@ class SignalingService {
     _client.connectionMessage = connMessage;
 
     try {
-      print('client connecting....');
+      print('client connecting.... (${_currentUser.name}/${_currentUser.password})');
       MqttClientConnectionStatus? result = await _client.connect();
       if (result!.state != MqttConnectionState.connected &&
           result.state != MqttConnectionState.connecting) {

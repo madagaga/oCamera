@@ -223,38 +223,58 @@ class CallController extends GetxController {
     });
   }
 
-  void hangup() {
+  Future<void> hangup() async {
+    // Prevent multiple calls to hangup
     if (hangedUp) return;
-
+    hangedUp = true;
+    
+    print('Hanging up call with ${target.value.name}');
+    
+    // Clean up local stream
     if (_localStream != null) {
       _localStream!.getTracks().forEach((track) {
         track.stop();
       });
       _localStream!.dispose();
       _localStream = null;
+      print('Local stream disposed');
     }
 
+    // Capture snapshot before disposing remote stream
     if (_remoteStream != null) {
-      captureSnapshot().then((onValue) {
-        _remoteStream!.getTracks().forEach((track) {
-          track.stop();
-        });
-        _remoteStream!.dispose();
-        _remoteStream = null;
+      try {
+        await captureSnapshot();
+        print('Snapshot captured');
+      } catch (e) {
+        print('Error capturing snapshot: $e');
+      }
+      
+      // Now dispose the remote stream
+      _remoteStream!.getTracks().forEach((track) {
+        track.stop();
       });
+      _remoteStream!.dispose();
+      _remoteStream = null;
+      print('Remote stream disposed');
     }
 
+    // Close peer connection
     if (_rtcPeerConnection != null) {
       _rtcPeerConnection!.close();
       _rtcPeerConnection = null;
+      print('RTCPeerConnection closed');
     }
+    
+    // Send hangup signal to the other device
     if (target.value.id != '') {
       _signalingService.hangup(target.value.id);
+      print('Hangup signal sent to ${target.value.id}');
     }
 
-    //remoteRTCVideoRenderer.dispose();
+    // Update UI state
     connected.value = false;
-    hangedUp = true;
+    
+    // Navigate back
     Get.back();
   }
 
