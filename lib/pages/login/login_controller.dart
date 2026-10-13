@@ -5,6 +5,8 @@ import 'package:get/get.dart';
 import 'package:get_storage/get_storage.dart';
 import 'package:rtc/models/user.dart';
 import 'package:rtc/routes/app_pages.dart';
+import 'package:rtc/services/signaling_channel.dart';
+import 'package:rtc/services/storage_service.dart';
 
 class LoginController extends GetxController {
   User userData = Get.find();
@@ -16,11 +18,6 @@ class LoginController extends GetxController {
   final RxString deviceName = ''.obs;
   final RxBool userExists = false.obs;
 
-  ///  The controller constructor.
-  LoginController() {
-    loadUserData();
-  }
-  
   @override
   void onInit() {
     super.onInit();
@@ -29,14 +26,19 @@ class LoginController extends GetxController {
 
   /// Loads user data from storage if it exists
   Future<void> loadUserData() async {
-    final storage = GetStorage();
-    final userJson = storage.read('currentUser');
-    
+    final userJson = GetStorage().read<String>('currentUser');
+
     if (userJson != null) {
       try {
         final Map<String, dynamic> userMap = jsonDecode(userJson);
-        userData = User.fromJson(userMap);
-        
+        // copie dans l'instance partagée (Get.find) plutôt que de la remplacer
+        final loaded = User.fromJson(userMap);
+        userData.id = loaded.id;
+        userData.name = loaded.name;
+        userData.password = loaded.password;
+        userData.broker = loaded.broker;
+        userData.deviceName = loaded.deviceName;
+
         // Update the observable variables
         name.value = userData.name;
         password.value = userData.password;
@@ -49,16 +51,40 @@ class LoginController extends GetxController {
     }
   }
 
+  // Test de connexion
+  final RxBool testing = false.obs;
+  final RxString testError = ''.obs;
+  final RxInt testMs = (-1).obs; // -1 : pas de résultat positif
+
+  Future<void> testConnection(
+      String broker, String name, String password) async {
+    testing.value = true;
+    testError.value = '';
+    testMs.value = -1;
+    final user = User()
+      ..name = name
+      ..id = name
+      ..password = password
+      ..broker = broker;
+    int ms = -1;
+    final error = await SignalingService.testConnection(user, (v) => ms = v);
+    testing.value = false;
+    if (error == null) {
+      testMs.value = ms;
+    } else {
+      testError.value = error;
+    }
+  }
+
   Future<void> saveUserData(
-      String name, String password, String broker, String deviceName) async {
-    final storage = GetStorage();
-    userData.id = DateTime.now().millisecondsSinceEpoch.toString();
+      String name, String password, String broker) async {
     userData.name = name;
+    userData.id = name;
     userData.password = password;
     userData.broker = broker;
-    userData.deviceName = deviceName;
+    userData.deviceName = name;
 
-    await storage.write('currentUser', jsonEncode(userData.toJson()));
+    Get.find<StorageService>().saveUser(userData);
     Get.offAndToNamed(Routes.LOADING);
   }
 }

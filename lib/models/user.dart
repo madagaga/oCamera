@@ -8,11 +8,12 @@ class User {
   User();
 
   User.fromJson(Map<String, dynamic> data) {
-    id = data['id'];
-    name = data['name'];
-    password = data['password'];
-    broker = data['broker'];
-    deviceName = data['deviceName'];
+    name = data['name'] ?? '';
+    // l'identifiant d'un viewer est son nom d'utilisateur MQTT
+    id = name;
+    password = data['password'] ?? '';
+    broker = data['broker'] ?? '';
+    deviceName = data['deviceName'] ?? '';
   }
 
   Map<String, dynamic> toJson() =>

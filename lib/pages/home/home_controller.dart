@@ -1,7 +1,6 @@
 import 'package:get/get.dart';
 import 'package:get_storage/get_storage.dart';
 import 'package:rtc/models/devices.dart';
-import 'package:rtc/models/sdp_packet.dart';
 import 'package:rtc/models/user.dart';
 import 'package:rtc/routes/app_pages.dart';
 import 'package:rtc/services/signaling_channel.dart';
@@ -17,56 +16,43 @@ class HomeController extends GetxController {
 
   ///  The controller constructor.
   HomeController() {
-    signalingService.onNewDeviceFound = _onNewDeviceFound;
-    signalingService.onOfferReceived = _onOfferReceived;
+    // les états déjà reçus sont rejoués à l'abonnement
+    signalingService.onDeviceState = _onDeviceState;
   }
 
-  Future<void> onResumed() async {
-    if (devices.isNotEmpty) {
-      storageService.saveDevices(devices);
-      devices.refresh();
-    } else {
-      getDevices();
-    }
-    super.onInit();
+  @override
+  void onClose() {
+    signalingService.onDeviceState = null;
+    super.onClose();
+  }
+
+  /// Sauvegarde la liste (appelée au retour d'un appel, pour l'aperçu).
+  void saveDevices() {
+    storageService.saveDevices(devices);
+    devices.refresh();
   }
 
   void disconnect() {
-    final storage = GetStorage();
-    storage.erase().then((value) {
+    signalingService.disconnect();
+    GetStorage().erase().then((value) {
       Get.offAndToNamed(Routes.LOADING);
     });
   }
 
-  void _onNewDeviceFound(Device d) {
-    // if devive is new add
-    if (!devices.containsKey(d.id)) {
-      devices[d.id] = d;
+  void _onDeviceState(String id, Map<String, dynamic>? state) {
+    if (id == signalingService.selfId) return;
+    if (state == null) {
+      // payload vide : l'administrateur a retiré l'appareil
+      devices.remove(id);
     } else {
-      devices[d.id]?.online = d.online;
-      devices[d.id]?.streaming = d.streaming;
+      devices.putIfAbsent(id, () => Device(id)).applyState(state);
     }
     devices.refresh();
+    storageService.saveDevices(devices);
   }
 
-  void _onOfferReceived(SdpPacket packet) {
-    Device target = Device(packet.source, packet.source, 'unknown', false);
-    if (devices.containsKey(packet.source)) {
-      target = devices[packet.source]!;
-    }
-
-    Get.toNamed(Routes.CALL, arguments: [packet, target]);
-  }
-
-  void getDevices() {
-    signalingService.getDevices();
-  }
-
-  void videoCall(Device target) {
-    Get.toNamed(Routes.CALL, arguments: [target]);
-  }
-
-  void audioCall(Device target) {
-    Get.toNamed(Routes.CALL, arguments: [target]);
+  Future<void> videoCall(Device target) async {
+    await Get.toNamed(Routes.CALL, arguments: [target]);
+    saveDevices();
   }
 }

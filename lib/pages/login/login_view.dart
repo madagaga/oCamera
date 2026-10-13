@@ -1,277 +1,136 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:rtc/pages/login/login_controller.dart';
+import 'package:rtc/theme/app_theme.dart';
 
-/// This class is the view for the [Login] page.
+/// Écran de connexion au broker.
 class LoginView extends GetView<LoginController> {
   LoginView({super.key}) {
-    // Initialize controllers with values from the controller
-    _initializeControllers();
+    brokerController.text = controller.broker.value;
+    userController.text = controller.name.value;
+    passwordController.text = controller.password.value;
+    // valeurs rechargées depuis le stockage après la construction
+    ever(controller.broker, (v) => brokerController.text = v);
+    ever(controller.name, (v) => userController.text = v);
+    ever(controller.password, (v) => passwordController.text = v);
   }
 
   final _formKey = GlobalKey<FormState>();
-  final TextEditingController nameController = TextEditingController();
-  final TextEditingController loginController = TextEditingController();
-  final TextEditingController passwordController = TextEditingController();
-  final TextEditingController brokerController = TextEditingController();
-  
-  void _initializeControllers() {
-    // Set initial values
-    nameController.text = controller.deviceName.value;
-    loginController.text = controller.name.value;
-    passwordController.text = controller.password.value;
-    brokerController.text = controller.broker.value;
-    
-    // Listen for changes in the controller's variables
-    ever(controller.deviceName, (value) => nameController.text = value);
-    ever(controller.name, (value) => loginController.text = value);
-    ever(controller.password, (value) => passwordController.text = value);
-    ever(controller.broker, (value) => brokerController.text = value);
-  }
-  
+  final brokerController = TextEditingController();
+  final userController = TextEditingController();
+  final passwordController = TextEditingController();
+  final RxBool obscureText = true.obs;
+
   @override
   Widget build(BuildContext context) {
-    final size = MediaQuery.of(context).size;    
+    final oc = context.oc;
     return Scaffold(
       resizeToAvoidBottomInset: true,
-      body: Container(
-        height: MediaQuery.of(context).size.height,
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Colors.indigo.shade800,
-              Colors.indigo.shade500,
-            ],
-          ),
-        ),
-        child: SafeArea(
-          child: SingleChildScrollView(
-            physics: const BouncingScrollPhysics(),
-            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-            child: Form(
-              key: _formKey,
-              child: Padding(
-                padding: const EdgeInsets.all(24.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    SizedBox(height: size.height * 0.05),
-                    // App Logo/Icon
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.1),
-                            blurRadius: 10,
-                            spreadRadius: 2,
-                          ),
-                        ],
-                      ),
-                      child: const Icon(
-                        Icons.videocam,
-                        size: 60,
-                        color: Colors.indigo,
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-                    // App Title
-                    const Text(
-                      "oCamera",
-                      style: TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      "Sign in to your account",
-                      style: TextStyle(
-                        fontSize: 16,
-                        color: Colors.white70,
-                      ),
-                    ),
-                    const SizedBox(height: 40),
-                    // Login Form
-                    Container(
-                      padding: const EdgeInsets.all(24),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(16),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.1),
-                            blurRadius: 10,
-                            spreadRadius: 2,
-                          ),
-                        ],
-                      ),
-                      child: Column(
-                        children: [
-                          // Device Name Field
-                          TextFormField(
-                            controller: nameController,
-                            decoration: InputDecoration(
-                              labelText: "Device Name",
-                              hintText: "Enter your device name",
-                              prefixIcon: const Icon(Icons.devices, color: Colors.indigo),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              focusedBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                borderSide: const BorderSide(color: Colors.indigo, width: 2),
-                              ),
-                              filled: true,
-                              fillColor: Colors.grey.shade50,
-                              contentPadding: const EdgeInsets.symmetric(vertical: 16),
-                            ),
-                            validator: (value) {
-                              if (value == null || value.isEmpty) {
-                                return 'Please enter a unique device name';
-                              }
-                              return null;
-                            },
-                          ),
-                          const SizedBox(height: 16),
-                          // Username Field
-                          TextFormField(
-                            controller: loginController,
-                            decoration: InputDecoration(
-                              labelText: "Username",
-                              hintText: "Enter your username",
-                              prefixIcon: const Icon(Icons.person, color: Colors.indigo),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              focusedBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                borderSide: const BorderSide(color: Colors.indigo, width: 2),
-                              ),
-                              filled: true,
-                              fillColor: Colors.grey.shade50,
-                              contentPadding: const EdgeInsets.symmetric(vertical: 16),
-                            ),
-                            validator: (value) {
-                              if (value == null || value.isEmpty) {
-                                return 'Please enter your username';
-                              }
-                              return null;
-                            },
-                          ),
-                          const SizedBox(height: 16),
-                          // Password Field
-                          Obx(() {
-                            // Create a local RxBool for password visibility
-                            final obscureText = true.obs;
-                            return TextFormField(
+      body: SafeArea(
+        child: LayoutBuilder(
+          builder: (context, c) => SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(24, 48, 24, 24),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: c.maxHeight - 72),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 440),
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 48,
+                          height: 48,
+                          decoration: BoxDecoration(
+                              color: oc.accentContainer,
+                              borderRadius: BorderRadius.circular(12)),
+                          child: Icon(Icons.videocam_outlined,
+                              color: oc.onAccentContainer),
+                        ),
+                        const SizedBox(height: 16),
+                        const Text('Sign in to oCamera',
+                            style: TextStyle(
+                                fontSize: 28, fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 4),
+                        Text('Connect to the broker that relays your cameras.',
+                            style: TextStyle(fontSize: 14, color: oc.muted)),
+                        const SizedBox(height: 32),
+                        _label('Broker URL', oc),
+                        TextFormField(
+                          controller: brokerController,
+                          keyboardType: TextInputType.url,
+                          autocorrect: false,
+                          style: const TextStyle(
+                              fontFamily: 'monospace', fontSize: 14),
+                          decoration: const InputDecoration(
+                              helperText:
+                                  'Include scheme and port, e.g. tls://host:8883'),
+                          validator: (v) {
+                            final uri = Uri.tryParse((v ?? '').trim());
+                            if (uri == null || uri.host.isEmpty || !uri.hasPort) {
+                              return 'Enter a URL with host and port';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 20),
+                        _label('Username', oc),
+                        TextFormField(
+                          controller: userController,
+                          autocorrect: false,
+                          autofillHints: const [AutofillHints.username],
+                          validator: (v) => (v ?? '').trim().isEmpty
+                              ? 'Enter your username'
+                              : null,
+                        ),
+                        const SizedBox(height: 20),
+                        _label('Password', oc),
+                        Obx(() => TextFormField(
                               controller: passwordController,
                               obscureText: obscureText.value,
+                              autofillHints: const [AutofillHints.password],
                               decoration: InputDecoration(
-                                labelText: "Password",
-                                hintText: "Enter your password",
-                                prefixIcon: const Icon(Icons.lock, color: Colors.indigo),
                                 suffixIcon: IconButton(
+                                  tooltip: obscureText.value
+                                      ? 'Show password'
+                                      : 'Hide password',
                                   icon: Icon(
-                                    obscureText.value ? Icons.visibility : Icons.visibility_off,
-                                    color: Colors.grey,
+                                    obscureText.value
+                                        ? Icons.visibility_outlined
+                                        : Icons.visibility_off_outlined,
+                                    color: oc.muted,
                                   ),
-                                  onPressed: () => obscureText.value = !obscureText.value,
-                                ),
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                focusedBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                  borderSide: const BorderSide(color: Colors.indigo, width: 2),
-                                ),
-                                filled: true,
-                                fillColor: Colors.grey.shade50,
-                                contentPadding: const EdgeInsets.symmetric(vertical: 16),
-                              ),
-                              validator: (value) {
-                                if (value == null || value.isEmpty) {
-                                  return 'Please enter your password';
-                                }
-                                return null;
-                              },
-                            );
-                          }),
-                          const SizedBox(height: 16),
-                          // Broker URL Field
-                          TextFormField(
-                            controller: brokerController,
-                            decoration: InputDecoration(
-                              labelText: "Broker URL:Port",
-                              hintText: "Enter broker URL and port",
-                              prefixIcon: const Icon(Icons.link, color: Colors.indigo),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              focusedBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                borderSide: const BorderSide(color: Colors.indigo, width: 2),
-                              ),
-                              filled: true,
-                              fillColor: Colors.grey.shade50,
-                              contentPadding: const EdgeInsets.symmetric(vertical: 16),
-                            ),
-                            validator: (value) {
-                              if (value == null || value.isEmpty) {
-                                return 'Please enter broker URL';
-                              }
-                              return null;
-                            },
-                          ),
-                          const SizedBox(height: 24),
-                          // Login Button
-                          SizedBox(
-                            width: double.infinity,
-                            height: 50,
-                            child: ElevatedButton(
-                              onPressed: () {
-                                if (_formKey.currentState!.validate()) {
-                                  controller.saveUserData(
-                                      loginController.text,
-                                      passwordController.text,
-                                      brokerController.text,
-                                      nameController.text);
-                                } else {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('Please fill all required fields')),
-                                  );
-                                }
-                              },
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.indigo,
-                                foregroundColor: Colors.white,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                elevation: 3,
-                              ),
-                              child: const Text(
-                                'SIGN IN',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
+                                  onPressed: () =>
+                                      obscureText.value = !obscureText.value,
                                 ),
                               ),
-                            ),
-                          ),
-                        ],
-                      ),
+                              validator: (v) => (v ?? '').isEmpty
+                                  ? 'Enter your password'
+                                  : null,
+                            )),
+                        const SizedBox(height: 20),
+                        Obx(() => OutlinedButton.icon(
+                              onPressed: controller.testing.value ? null : _test,
+                              icon: controller.testing.value
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2))
+                                  : const Icon(Icons.link, size: 18),
+                              label: const Text('Test connection'),
+                            )),
+                        _TestResult(controller: controller),
+                        const SizedBox(height: 24),
+                        FilledButton(
+                          onPressed: _submit,
+                          child: const Text('Sign in'),
+                        ),
+                      ],
                     ),
-                    // Add extra padding at the bottom to ensure form is visible when keyboard is shown
-                    SizedBox(height: MediaQuery.of(context).viewInsets.bottom > 0 
-                      ? 120 
-                      : 24),
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -280,6 +139,74 @@ class LoginView extends GetView<LoginController> {
       ),
     );
   }
+
+  Widget _label(String text, OcamColors oc) => Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Text(text,
+            style: TextStyle(
+                fontSize: 13, fontWeight: FontWeight.w500, color: oc.muted)),
+      );
+
+  void _test() {
+    if (_formKey.currentState!.validate()) {
+      controller.testConnection(brokerController.text.trim(),
+          userController.text.trim(), passwordController.text);
+    }
+  }
+
+  void _submit() {
+    debugPrint('[Login] sign in');
+    if (_formKey.currentState!.validate()) {
+      controller.saveUserData(userController.text.trim(),
+          passwordController.text, brokerController.text.trim());
+    }
+  }
 }
 
+class _TestResult extends StatelessWidget {
+  final LoginController controller;
+  const _TestResult({required this.controller});
 
+  @override
+  Widget build(BuildContext context) => Obx(() => _content(context));
+
+  Widget _content(BuildContext context) {
+    final oc = context.oc;
+    final cs = Theme.of(context).colorScheme;
+    final error = controller.testError.value;
+    final ok = controller.testMs.value;
+    if (error.isEmpty && ok < 0) return const SizedBox.shrink();
+    final isError = error.isNotEmpty;
+    return Container(
+      margin: const EdgeInsets.only(top: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: isError ? cs.errorContainer : oc.surface2,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(isError ? Icons.cancel_outlined : Icons.check_circle_outline,
+              size: 20, color: isError ? cs.onErrorContainer : oc.online),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(isError ? "Couldn't reach the broker" : 'Broker reachable',
+                    style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: isError ? cs.onErrorContainer : null)),
+                Text(isError ? error : '$ok ms · TLS valid · credentials accepted',
+                    style: TextStyle(
+                        fontSize: 13,
+                        color: isError ? cs.onErrorContainer : oc.muted)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

@@ -1,429 +1,447 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:get_storage/get_storage.dart';
 
+import '../../models/devices.dart';
+import '../../theme/app_theme.dart';
 import 'home_controller.dart';
 
-/// This class is the view for the [Home] page.
+/// Écran d'accueil : état du broker + une vignette 16:9 par caméra.
 class HomeView extends GetView<HomeController> {
   const HomeView({super.key});
 
   @override
   Widget build(BuildContext context) {
-    Get.put(HomeController());
+    final oc = context.oc;
     return Scaffold(
-      extendBodyBehindAppBar: true,
       appBar: AppBar(
-        elevation: 0,
-        backgroundColor: Colors.transparent,
-        title: Row(
-          children: [
-            Text(
-              controller.currentUser.deviceName,
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(width: 8),
-            const Text(
-              "- Available Devices",
-              style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.normal,
-                fontSize: 16,
-              ),
-            ),
-          ],
-        ),
-        actions: <Widget>[
-          IconButton(
-            icon: const Icon(Icons.refresh, color: Colors.white),
-            onPressed: () {
-              controller.getDevices();
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Refreshing devices...'))
-              );
-            },
-          ),
-          PopupMenuButton(
-            icon: const Icon(Icons.more_vert, color: Colors.white),
-            itemBuilder: (context) => [
-              const PopupMenuItem(
-                value: 1,
-                child: Row(
-                  children: [
-                    Icon(Icons.logout, color: Colors.indigo),
-                    SizedBox(width: 8),
-                    Text('Disconnect'),
-                  ],
-                ),
-              ),
-            ],
-            onSelected: (value) {
-              if (value == 1) {
+        toolbarHeight: 64,
+        title: const Text('oCamera'),
+        actions: [
+          PopupMenuButton<String>(
+            icon: Icon(Icons.tune, color: oc.muted),
+            tooltip: 'Settings',
+            onSelected: (v) {
+              if (v == 'theme') {
+                final dark = Get.isDarkMode;
+                Get.changeThemeMode(dark ? ThemeMode.light : ThemeMode.dark);
+                GetStorage().write('theme', dark ? 'light' : 'dark');
+              } else if (v == 'logout') {
                 controller.disconnect();
               }
             },
-          )
-        ],
-      ),
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Colors.indigo.shade800,
-              Colors.indigo.shade500,
+            itemBuilder: (_) => [
+              PopupMenuItem(
+                value: 'theme',
+                child: Text(Get.isDarkMode ? 'Light theme' : 'Dark theme'),
+              ),
+              const PopupMenuItem(value: 'logout', child: Text('Disconnect')),
             ],
-          ),
-        ),
-        child: SafeArea(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [              
-              Align(
-                alignment: Alignment.centerRight,
-                child: Padding(
-                  padding: const EdgeInsets.only(right: 20),
-                  child: Obx(() => Text(
-                    "${controller.devices.length} device${controller.devices.length != 1 ? 's' : ''} found",
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: Colors.white70,
-                      fontStyle: FontStyle.italic,
-                    ),
-                  )),
-                ),
-              ),
-              const SizedBox(height: 2),
-              Expanded(
-                child: RefreshIndicator(
-                  color: Colors.indigo,
-                  backgroundColor: Colors.white,
-                  onRefresh: () async {
-                    controller.getDevices();
-                  },
-                  child: _buildDevicesList(),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// This function builds the devices list.
-  Widget _buildDevicesList() {
-    return Obx(
-      () => controller.devices.isEmpty
-          ? _buildEmptyState()
-          : ListView.builder(
-              padding: const EdgeInsets.all(16),
-              itemCount: controller.devices.length,
-              itemBuilder: _devicesListItemBuilder,
-            ),
-    );
-  }
-
-  /// Builds an empty state when no devices are available
-  Widget _buildEmptyState() {
-    return ListView(
-      children: [
-        Container(
-          margin: const EdgeInsets.all(20),
-          padding: const EdgeInsets.all(30),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.1),
-                blurRadius: 10,
-                spreadRadius: 2,
-              ),
-            ],
-          ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                Icons.videocam_off,
-                size: 80,
-                color: Colors.indigo.withValues(alpha: 0.5),
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                "No Devices Found",
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.indigo,
-                ),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                "Pull down to refresh or check your connection",
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Colors.grey,
-                ),
-              ),
-              const SizedBox(height: 20),
-              ElevatedButton.icon(
-                onPressed: () {
-                  controller.getDevices();
-                },
-                icon: const Icon(Icons.refresh),
-                label: const Text("REFRESH"),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.indigo,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  /// Builds a device list item.
-  Widget _devicesListItemBuilder(BuildContext context, int index) {
-    final item = controller.devices.values.elementAt(index);
-    
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-        color: Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.1),
-            blurRadius: 10,
-            spreadRadius: 2,
           ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      body: Column(
         children: [
-          // Device Header
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: Colors.indigo.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(12),
+          _StatusBar(controller: controller),
+          Expanded(
+            child: Obx(() {
+              final list = controller.devices.values.toList()
+                ..sort((a, b) {
+                  if (a.online != b.online) return a.online ? -1 : 1;
+                  return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+                });
+              if (list.isEmpty) return const _EmptyState();
+              return LayoutBuilder(builder: (context, c) {
+                final cols = c.maxWidth >= 900
+                    ? 3
+                    : c.maxWidth >= 600
+                        ? 2
+                        : 1;
+                return GridView.builder(
+                  padding: const EdgeInsets.all(16),
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: cols,
+                    mainAxisSpacing: 12,
+                    crossAxisSpacing: 16,
+                    mainAxisExtent: (c.maxWidth - 32 - (cols - 1) * 16) /
+                            cols *
+                            9 /
+                            16 +
+                        64,
                   ),
-                  child: const Icon(
-                    Icons.videocam,
-                    color: Colors.indigo,
-                    size: 24,
+                  itemCount: list.length,
+                  itemBuilder: (_, i) => _CameraTile(
+                    device: list[i],
+                    onOpen: () => controller.videoCall(list[i]),
+                    onDetails: () => _showDetails(context, list[i]),
                   ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        item.name,
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      Text(
-                        item.type.isEmpty ? "Camera Device" : item.type,
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: Colors.grey.shade600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: item.online ? Colors.green.withValues(alpha: 0.1) : Colors.red.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.circle,
-                        color: item.online ? Colors.green : Colors.red,
-                        size: 10,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        item.online ? "Online" : "Offline",
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          color: item.online ? Colors.green : Colors.red,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          
-          // Device Preview
-          Stack(
-            children: [
-              // Preview Image or Placeholder
-              if (item.snapshot.isEmpty)
-                Container(
-                  height: 200,
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade200,
-                    borderRadius: const BorderRadius.only(
-                      bottomLeft: Radius.circular(16),
-                      bottomRight: Radius.circular(16),
-                    ),
-                  ),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.videocam_off,
-                        size: 60,
-                        color: Colors.grey.shade400,
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        "No Preview Available",
-                        style: TextStyle(
-                          color: Colors.grey.shade600,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                )
-              else
-                ClipRRect(
-                  borderRadius: const BorderRadius.only(
-                    bottomLeft: Radius.circular(16),
-                    bottomRight: Radius.circular(16),
-                  ),
-                  child: Image.memory(
-                    item.snapshot,
-                    width: double.infinity,
-                    height: 200,
-                    fit: BoxFit.cover,
-                    opacity: !item.online
-                        ? const AlwaysStoppedAnimation(.5)
-                        : const AlwaysStoppedAnimation(1),
-                  ),
-                ),
-              
-              // Status Overlay
-              if (item.streaming)
-                Positioned(
-                  top: 12,
-                  right: 12,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: Colors.red,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: const Row(
-                      children: [
-                        Icon(
-                          Icons.stream,
-                          color: Colors.white,
-                          size: 14,
-                        ),
-                        SizedBox(width: 4),
-                        Text(
-                          "LIVE",
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              
-              // Play Button
-              if (!item.streaming && item.online)
-                Positioned.fill(
-                  child: Center(
-                    child: Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.2),
-                            blurRadius: 10,
-                            spreadRadius: 2,
-                          ),
-                        ],
-                      ),
-                      child: IconButton(
-                        icon: const Icon(
-                          Icons.play_arrow,
-                          size: 36,
-                          color: Colors.indigo,
-                        ),
-                        onPressed: () {
-                          controller.videoCall(item);
-                        },
-                      ),
-                    ),
-                  ),
-                ),
-              
-              // Offline Overlay
-              if (!item.online)
-                Positioned.fill(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.5),
-                      borderRadius: const BorderRadius.only(
-                        bottomLeft: Radius.circular(16),
-                        bottomRight: Radius.circular(16),
-                      ),
-                    ),
-                    child: const Center(
-                      child: Text(
-                        "OFFLINE",
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 20,
-                          letterSpacing: 2,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-            ],
+                );
+              });
+            }),
           ),
         ],
+      ),
+    );
+  }
+
+  void _showDetails(BuildContext context, Device d) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => _DetailsSheet(
+        device: d,
+        onOpen: () {
+          Navigator.of(context).pop();
+          controller.videoCall(d);
+        },
       ),
     );
   }
 }
 
+class _StatusBar extends StatelessWidget {
+  final HomeController controller;
+  const _StatusBar({required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    final oc = context.oc;
+    return Obx(() {
+      final connected = controller.signalingService.connected.value;
+      final online = controller.devices.values.where((d) => d.online).length;
+      final host = Uri.tryParse(controller.currentUser.broker)?.host ?? '';
+      return Container(
+        margin: const EdgeInsets.symmetric(horizontal: 16),
+        height: 40,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: oc.surface2,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          children: [
+            _Dot(connected ? oc.online : oc.inUse),
+            const SizedBox(width: 8),
+            Text(
+              connected ? 'Connected · $online online' : 'Reconnecting…',
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+            ),
+            const Spacer(),
+            Flexible(
+              child: Text(host,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      fontFamily: 'monospace', fontSize: 12, color: oc.muted)),
+            ),
+          ],
+        ),
+      );
+    });
+  }
+}
+
+class _Dot extends StatelessWidget {
+  final Color color;
+  const _Dot(this.color);
+  @override
+  Widget build(BuildContext context) => Container(
+      width: 8,
+      height: 8,
+      decoration: BoxDecoration(color: color, shape: BoxShape.circle));
+}
+
+class _CameraTile extends StatelessWidget {
+  final Device device;
+  final VoidCallback onOpen;
+  final VoidCallback onDetails;
+  const _CameraTile(
+      {required this.device, required this.onOpen, required this.onDetails});
+
+  @override
+  Widget build(BuildContext context) {
+    final oc = context.oc;
+    final cs = Theme.of(context).colorScheme;
+    final d = device;
+    final status = !d.online ? 'Offline' : d.busy ? 'In use' : 'Online';
+    final dot = !d.online ? oc.offline : d.busy ? oc.inUse : oc.online;
+    final canOpen = d.online && !d.busy;
+    final meta = [
+      d.isPhone ? 'Phone' : 'IP camera',
+      if (d.agent != null) d.agent!,
+    ].join(' · ');
+
+    return Semantics(
+      label: '${d.name}, $status. Long-press for details.',
+      button: true,
+      child: Material(
+        color: cs.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: cs.outline),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: canOpen ? onOpen : onDetails,
+          onLongPress: onDetails,
+          child: Column(
+            children: [
+              AspectRatio(
+                aspectRatio: 16 / 9,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    if (d.snapshot.isEmpty)
+                      ColoredBox(
+                        color: oc.surface3,
+                        child: Icon(
+                            d.online ? Icons.videocam_outlined : Icons.videocam_off_outlined,
+                            size: 40,
+                            color: oc.outlineStrong),
+                      )
+                    else
+                      Opacity(
+                        opacity: d.online ? 1 : 0.4,
+                        child: Image.memory(d.snapshot,
+                            fit: BoxFit.cover, gaplessPlayback: true),
+                      ),
+                    if (canOpen)
+                      Center(
+                        child: Container(
+                          width: 56,
+                          height: 56,
+                          decoration: const BoxDecoration(
+                              color: Color(0x8C000000), shape: BoxShape.circle),
+                          child: const Icon(Icons.play_arrow_rounded,
+                              color: Colors.white, size: 32),
+                        ),
+                      ),
+                    if (d.busy)
+                      Positioned(
+                        right: 8,
+                        top: 8,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                              color: const Color(0xFFE3A008),
+                              borderRadius: BorderRadius.circular(4)),
+                          child: Text(
+                            d.viewer == null
+                                ? 'In use'
+                                : 'In use · ${d.viewer}',
+                            style: const TextStyle(
+                                color: Color(0xFF1F1300),
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ),
+                    if (!d.online)
+                      Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                              color: const Color(0x99000000),
+                              borderRadius: BorderRadius.circular(16)),
+                          child: const Text('Offline',
+                              style: TextStyle(
+                                  color: Color(0xFFE6E9EB), fontSize: 12)),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(children: [
+                            if (d.isPhone) ...[
+                              Icon(Icons.smartphone, size: 16, color: oc.muted),
+                              const SizedBox(width: 6),
+                            ],
+                            Flexible(
+                              child: Text(d.name,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600)),
+                            ),
+                          ]),
+                          Text(meta,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(fontSize: 13, color: oc.muted)),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    _Dot(dot),
+                    const SizedBox(width: 6),
+                    Text(status,
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: oc.muted)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyState extends StatelessWidget {
+  const _EmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    final oc = context.oc;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                  color: oc.accentContainer,
+                  borderRadius: BorderRadius.circular(16)),
+              child: Icon(Icons.videocam_outlined,
+                  size: 36, color: oc.onAccentContainer),
+            ),
+            const SizedBox(height: 20),
+            const Text('No cameras yet',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            Text(
+              'Cameras appear here as soon as they come online. Check that the camera agent uses the same broker.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 14, color: oc.muted),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DetailsSheet extends StatelessWidget {
+  final Device device;
+  final VoidCallback onOpen;
+  const _DetailsSheet({required this.device, required this.onOpen});
+
+  @override
+  Widget build(BuildContext context) {
+    final oc = context.oc;
+    final cs = Theme.of(context).colorScheme;
+    final d = device;
+    final status = !d.online ? 'Offline' : d.busy ? 'In use' : 'Online';
+
+    Widget row(String label, Widget value) => Container(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          decoration: BoxDecoration(
+              border: Border(bottom: BorderSide(color: cs.outline))),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                  width: 88,
+                  child: Text(label,
+                      style: TextStyle(fontSize: 13, color: oc.muted))),
+              Expanded(child: value),
+            ],
+          ),
+        );
+
+    Widget chips(List<String> items) => Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final i in items)
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                    border: Border.all(color: oc.outlineStrong),
+                    borderRadius: BorderRadius.circular(8)),
+                child: Text(i.toUpperCase(),
+                    style: const TextStyle(
+                        fontFamily: 'monospace', fontSize: 12)),
+              ),
+          ],
+        );
+
+    final codecs = [...d.caps.video, ...d.caps.audio];
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                    color: oc.accentContainer,
+                    borderRadius: BorderRadius.circular(12)),
+                child: Icon(d.isPhone ? Icons.smartphone : Icons.videocam_outlined,
+                    color: oc.onAccentContainer),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(d.name,
+                        style: const TextStyle(
+                            fontSize: 20, fontWeight: FontWeight.w600)),
+                    Text('$status · ${d.isPhone ? 'Phone camera' : 'IP camera'}',
+                        style: TextStyle(fontSize: 13, color: oc.muted)),
+                  ],
+                ),
+              ),
+            ]),
+            const SizedBox(height: 16),
+            Divider(color: cs.outline),
+            row('Agent', Text(d.agent ?? 'Unknown')),
+            row('Codecs',
+                codecs.isEmpty ? const Text('Not reported') : chips(codecs)),
+            row(
+                'Streams',
+                d.caps.streams.isEmpty
+                    ? const Text('Default')
+                    : chips(d.caps.streams)),
+            row(
+                'Supports',
+                Text(d.caps.cmds.isEmpty
+                    ? 'No remote commands'
+                    : d.caps.cmds.join(' · '))),
+            const SizedBox(height: 20),
+            FilledButton.icon(
+              onPressed: d.online && !d.busy ? onOpen : null,
+              icon: const Icon(Icons.play_arrow_rounded),
+              label: Text(!d.online
+                  ? 'Camera is offline'
+                  : d.busy
+                      ? 'Camera is in use'
+                      : 'Open live view'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
