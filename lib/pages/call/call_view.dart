@@ -11,7 +11,7 @@ class CallView extends GetView<CallController> {
     return PopScope(
         canPop: false,
         onPopInvokedWithResult: (_, __) async {
-          controller.hangup();
+          await controller.hangup();
         },
         child: Scaffold(
           backgroundColor: Colors.black,

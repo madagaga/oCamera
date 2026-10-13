@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../models/action_packet.dart';
@@ -111,27 +112,31 @@ class SignalingService {
     _client.connectionMessage = connMessage;
 
     try {
-      print('client connecting....');
+      debugPrint('client connecting.... (${_currentUser.name}/${_currentUser.password})');
       MqttClientConnectionStatus? result = await _client.connect();
       if (result!.state != MqttConnectionState.connected &&
           result.state != MqttConnectionState.connecting) {
-        _onConnected!(false);
+        if (_onConnected != null) {
+          _onConnected!(false);
+        }
         return;
       }
 
       _client.subscribe('/devices', MqttQos.atLeastOnce);
       _client.subscribe('/${_currentUser.id}', MqttQos.atLeastOnce);
     } on Exception catch (e) {
-      _onConnected!(false);
-      print('[MQTT] : client exception - $e');
+      if (_onConnected != null) {
+        _onConnected!(false);
+      }
+      debugPrint('[MQTT] : client exception - $e');
       _client.disconnect();
     }
 
     // when connected, print a confirmation, else print an error
     if (_client.connectionStatus?.state == MqttConnectionState.connected) {
-      print('[MQTT] : client connected');
+      debugPrint('[MQTT] : client connected');
     } else {
-      print(
+      debugPrint(
           '[MQTT] : ERROR client connection failed - disconnecting, status is ${_client.connectionStatus}');
       _client.disconnect();
     }
@@ -139,7 +144,7 @@ class SignalingService {
 
   void _onClientConnected() {
     try {
-      print('[MQTT] : connected');
+      debugPrint('[MQTT] : connected');
       heartBeat(true);
 
       streamSubscription ??= _client.updates!.listen(_onNewMessageReceived);
@@ -147,13 +152,16 @@ class SignalingService {
       if (_onConnected != null) {
         _onConnected!(true);
       }
-    } on Exception catch (_) {
-      print(_);
+    } on Exception catch (e) {
+      debugPrint(e.toString());
     }
   }
 
   void _onClientDisconnected() {
-    print('[MQTT] : disconnected');
+    debugPrint('[MQTT] : disconnected');
+    if (_onConnected != null) {
+      _onConnected!(false);
+    }
   }
 
   void _onNewMessageReceived(List<MqttReceivedMessage<MqttMessage?>>? c) {
@@ -167,26 +175,34 @@ class SignalingService {
       final pt =
           MqttPublishPayload.bytesToStringAsString(recMess.payload.message);
       final data = jsonDecode(pt);
-
-      if (data['source'] == _currentUser.id) {
-        print('[MQTT] :  ignoring echo');
+      if (data is! Map<String, dynamic>) {
         return;
       }
 
-      print(
+      if (data['source'] == _currentUser.id) {
+        debugPrint('[MQTT] :  ignoring echo');
+        return;
+      }
+
+      debugPrint(
           '[MQTT] : New data arrived: topic is <${c[0].topic}>, payload is $pt');
 
-      switch (data['type'] as String) {
+      switch ((data['type'] ?? '').toString()) {
         case 'sdp':
-          final Map<String, dynamic> jsonData = data['data'];
-          if (jsonData['type'] as String == 'offer') {
+          final jsonData = data['data'];
+          if (jsonData is! Map<String, dynamic>) {
+            return;
+          }
+
+          final sdpType = (jsonData['type'] ?? '').toString();
+          if (sdpType == 'offer') {
             if (_onOfferReceived == null) {
               return;
             }
 
             _onOfferReceived!(SdpPacket(data['source'],
                 RTCSessionDescription(jsonData['sdp'], jsonData['type'])));
-          } else if (jsonData['type'] as String == 'answer') {
+          } else if (sdpType == 'answer') {
             if (_onAnswerReceived == null) {
               return;
             }
@@ -198,7 +214,10 @@ class SignalingService {
           if (_onIceCandidateReceived == null) {
             return;
           }
-          final Map<String, dynamic> jsonData = data['data'];
+          final jsonData = data['data'];
+          if (jsonData is! Map<String, dynamic>) {
+            return;
+          }
           _onIceCandidateReceived!(IcePacket(
               data['source'],
               RTCIceCandidate(
@@ -219,15 +238,20 @@ class SignalingService {
             return;
           }
 
-          final Map<String, dynamic> jsonData = data['data'];
+          final jsonData = data['data'];
+          if (jsonData is! Map<String, dynamic>) {
+            return;
+          }
           Device u = Device.fromJson(jsonData, false);
           _onNewDeviceFound!(u);
+          break;
 
         case 'query':
           heartBeat(true);
+          break;
       }
-    } on Exception catch (_) {
-      print(_);
+    } on Exception catch (e) {
+      debugPrint(e.toString());
     }
   }
 
@@ -238,13 +262,16 @@ class SignalingService {
   }
 
   void _send(String channel, Map<String, dynamic> data) {
+    if (_client.connectionStatus?.state != MqttConnectionState.connected) {
+      debugPrint('[MQTT] : skip send, client not connected ($channel)');
+      return;
+    }
+
     data['source'] = _currentUser.id;
     final builder1 = MqttClientPayloadBuilder();
-    print('[MQTT] : Sending message to $channel : $data');
+    debugPrint('[MQTT] : Sending message to $channel : $data');
     builder1.addString(jsonEncode(data));
-    if (_client.connectionStatus!.state == MqttConnectionState.connected) {
-      _client.publishMessage(channel, MqttQos.atLeastOnce, builder1.payload!);
-    }
+    _client.publishMessage(channel, MqttQos.atLeastOnce, builder1.payload!);
   }
 
   void sendIceCandidate(String targetId, RTCIceCandidate iceCandidate) {
