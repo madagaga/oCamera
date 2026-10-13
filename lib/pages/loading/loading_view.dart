@@ -36,7 +36,7 @@ class LoadingView extends GetView<LoadingController> {
                     shape: BoxShape.circle,
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.1),
+                        color: Colors.black.withValues(alpha: 0.1),
                         blurRadius: 10,
                         spreadRadius: 2,
                       ),
@@ -68,7 +68,7 @@ class LoadingView extends GetView<LoadingController> {
                     borderRadius: BorderRadius.circular(16),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.1),
+                        color: Colors.black.withValues(alpha: 0.1),
                         blurRadius: 10,
                         spreadRadius: 2,
                       ),
@@ -97,7 +97,7 @@ class LoadingView extends GetView<LoadingController> {
                       Container(
                         padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
-                          color: Colors.indigo.withOpacity(0.05),
+                          color: Colors.indigo.withValues(alpha: 0.05),
                           borderRadius: BorderRadius.circular(100),
                         ),
                         child: const SizedBox(
@@ -128,3 +128,5 @@ class LoadingView extends GetView<LoadingController> {
     );
   }
 }
+
+

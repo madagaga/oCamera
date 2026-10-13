@@ -31,9 +31,7 @@ class LoginView extends GetView<LoginController> {
   
   @override
   Widget build(BuildContext context) {
-    final size = MediaQuery.of(context).size;
-    final theme = Theme.of(context);
-    
+    final size = MediaQuery.of(context).size;    
     return Scaffold(
       resizeToAvoidBottomInset: true,
       body: Container(
@@ -68,7 +66,7 @@ class LoginView extends GetView<LoginController> {
                         shape: BoxShape.circle,
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withOpacity(0.1),
+                            color: Colors.black.withValues(alpha: 0.1),
                             blurRadius: 10,
                             spreadRadius: 2,
                           ),
@@ -107,7 +105,7 @@ class LoginView extends GetView<LoginController> {
                         borderRadius: BorderRadius.circular(16),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withOpacity(0.1),
+                            color: Colors.black.withValues(alpha: 0.1),
                             blurRadius: 10,
                             spreadRadius: 2,
                           ),
@@ -283,3 +281,5 @@ class LoginView extends GetView<LoginController> {
     );
   }
 }
+
+

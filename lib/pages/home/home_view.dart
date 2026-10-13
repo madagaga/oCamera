@@ -18,7 +18,7 @@ class HomeView extends GetView<HomeController> {
         title: Row(
           children: [
             Text(
-              "${controller.currentUser.deviceName}",
+              controller.currentUser.deviceName,
               style: const TextStyle(
                 color: Colors.white,
                 fontWeight: FontWeight.bold,
@@ -139,7 +139,7 @@ class HomeView extends GetView<HomeController> {
             borderRadius: BorderRadius.circular(16),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.1),
+                color: Colors.black.withValues(alpha: 0.1),
                 blurRadius: 10,
                 spreadRadius: 2,
               ),
@@ -151,7 +151,7 @@ class HomeView extends GetView<HomeController> {
               Icon(
                 Icons.videocam_off,
                 size: 80,
-                color: Colors.indigo.withOpacity(0.5),
+                color: Colors.indigo.withValues(alpha: 0.5),
               ),
               const SizedBox(height: 16),
               const Text(
@@ -204,7 +204,7 @@ class HomeView extends GetView<HomeController> {
         color: Colors.white,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.1),
+            color: Colors.black.withValues(alpha: 0.1),
             blurRadius: 10,
             spreadRadius: 2,
           ),
@@ -221,7 +221,7 @@ class HomeView extends GetView<HomeController> {
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: Colors.indigo.withOpacity(0.1),
+                    color: Colors.indigo.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: const Icon(
@@ -255,7 +255,7 @@ class HomeView extends GetView<HomeController> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   decoration: BoxDecoration(
-                    color: item.online ? Colors.green.withOpacity(0.1) : Colors.red.withOpacity(0.1),
+                    color: item.online ? Colors.green.withValues(alpha: 0.1) : Colors.red.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: Row(
@@ -375,7 +375,7 @@ class HomeView extends GetView<HomeController> {
                         shape: BoxShape.circle,
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withOpacity(0.2),
+                            color: Colors.black.withValues(alpha: 0.2),
                             blurRadius: 10,
                             spreadRadius: 2,
                           ),
@@ -400,7 +400,7 @@ class HomeView extends GetView<HomeController> {
                 Positioned.fill(
                   child: Container(
                     decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.5),
+                      color: Colors.black.withValues(alpha: 0.5),
                       borderRadius: const BorderRadius.only(
                         bottomLeft: Radius.circular(16),
                         bottomRight: Radius.circular(16),
@@ -426,3 +426,4 @@ class HomeView extends GetView<HomeController> {
     );
   }
 }
+

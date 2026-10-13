@@ -101,18 +101,19 @@ class CallController extends GetxController {
           if (candidate.candidate != null)
             _signalingService.sendIceCandidate(target.value.id, candidate)
           else
-            print("ice empty")
+            debugPrint("ice empty")
         };
 
     _rtcPeerConnection!.onConnectionState =
         (webrtc.RTCPeerConnectionState state) {
-      print(' ********** $state');
+      debugPrint(' ********** $state');
       switch (state) {
         case webrtc.RTCPeerConnectionState.RTCPeerConnectionStateConnecting:
           break;
         case webrtc.RTCPeerConnectionState.RTCPeerConnectionStateConnected:
           connected.value = true;
           enableVideoButton = !isIncomingCall && target.value.type != "sender";
+          break;
         case webrtc.RTCPeerConnectionState.RTCPeerConnectionStateFailed:
         case webrtc.RTCPeerConnectionState.RTCPeerConnectionStateDisconnected:
           hangup();
@@ -227,9 +228,9 @@ class CallController extends GetxController {
     // Prevent multiple calls to hangup
     if (hangedUp) return;
     hangedUp = true;
-    
-    print('Hanging up call with ${target.value.name}');
-    
+
+    debugPrint('Hanging up call with ${target.value.name}');
+
     // Clean up local stream
     if (_localStream != null) {
       _localStream!.getTracks().forEach((track) {
@@ -237,43 +238,43 @@ class CallController extends GetxController {
       });
       _localStream!.dispose();
       _localStream = null;
-      print('Local stream disposed');
+      debugPrint('Local stream disposed');
     }
 
     // Capture snapshot before disposing remote stream
     if (_remoteStream != null) {
       try {
         await captureSnapshot();
-        print('Snapshot captured');
+        debugPrint('Snapshot captured');
       } catch (e) {
-        print('Error capturing snapshot: $e');
+        debugPrint('Error capturing snapshot: $e');
       }
-      
+
       // Now dispose the remote stream
       _remoteStream!.getTracks().forEach((track) {
         track.stop();
       });
       _remoteStream!.dispose();
       _remoteStream = null;
-      print('Remote stream disposed');
+      debugPrint('Remote stream disposed');
     }
 
     // Close peer connection
     if (_rtcPeerConnection != null) {
       _rtcPeerConnection!.close();
       _rtcPeerConnection = null;
-      print('RTCPeerConnection closed');
+      debugPrint('RTCPeerConnection closed');
     }
-    
+
     // Send hangup signal to the other device
     if (target.value.id != '') {
       _signalingService.hangup(target.value.id);
-      print('Hangup signal sent to ${target.value.id}');
+      debugPrint('Hangup signal sent to ${target.value.id}');
     }
 
     // Update UI state
     connected.value = false;
-    
+
     // Navigate back
     Get.back();
   }
@@ -290,7 +291,14 @@ class CallController extends GetxController {
         toggleVideo();
         break;
       case 'error':
-        error.value = packet.data['message'];
+        final payload = packet.data['data'];
+        if (payload is Map && payload['message'] != null) {
+          error.value = payload['message'].toString();
+        } else if (packet.data['message'] != null) {
+          error.value = packet.data['message'].toString();
+        } else {
+          error.value = 'Unknown error';
+        }
         break;
     }
   }
@@ -335,12 +343,12 @@ class CallController extends GetxController {
 
         // Save the image to the device's documents directory
         target.value.snapshot = pngBytes;
-        print('Snapshot saved');
+        debugPrint('Snapshot saved');
       } else {
-        print('VideoRenderKey is not set or context is null');
+        debugPrint('VideoRenderKey is not set or context is null');
       }
     } catch (e) {
-      print('Error capturing snapshot: $e');
+      debugPrint('Error capturing snapshot: $e');
     }
   }
 }

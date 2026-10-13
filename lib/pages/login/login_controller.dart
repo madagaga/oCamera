@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 
 import 'package:get/get.dart';
 import 'package:get_storage/get_storage.dart';
@@ -43,7 +44,7 @@ class LoginController extends GetxController {
         deviceName.value = userData.deviceName;
         userExists.value = true;
       } catch (e) {
-        print('Error loading user data: $e');
+        debugPrint('Error loading user data: $e');
       }
     }
   }
@@ -61,3 +62,5 @@ class LoginController extends GetxController {
     Get.offAndToNamed(Routes.LOADING);
   }
 }
+
+

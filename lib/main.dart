@@ -42,7 +42,7 @@ class OcameraApp extends StatefulWidget {
   const OcameraApp({super.key});
 
   @override
-  _AppState createState() => _AppState();
+  State<OcameraApp> createState() => _AppState();
 }
 
 /// This class represents the widget which is the root of your application.
@@ -83,3 +83,4 @@ class _AppState extends State<OcameraApp> with WidgetsBindingObserver {
     );
   }
 }
+
