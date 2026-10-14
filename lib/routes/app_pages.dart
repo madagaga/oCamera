@@ -2,6 +2,8 @@
 
 import 'package:get/get.dart';
 import 'package:rtc/pages/call/call_binding.dart';
+import 'package:rtc/pages/camera/camera_binding.dart';
+import 'package:rtc/pages/camera/camera_view.dart';
 import 'package:rtc/pages/call/call_view.dart';
 import 'package:rtc/pages/home/home_view.dart';
 import 'package:rtc/pages/home/home_binding.dart';
@@ -33,6 +35,11 @@ class AppPages {
       name: Routes.HOME,
       page: () => const HomeView(),
       binding: HomeBinding(),
+    ),
+    GetPage(
+      name: Routes.CAMERA,
+      page: () => const CameraView(),
+      binding: CameraBinding(),
     ),
     GetPage(
       name: Routes.CALL,

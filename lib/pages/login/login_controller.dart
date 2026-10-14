@@ -16,6 +16,7 @@ class LoginController extends GetxController {
   final RxString password = ''.obs;
   final RxString broker = 'tls://1720f847e41a4e1e9e17e321e32ec831.s2.eu.hivemq.cloud:8883'.obs;
   final RxString deviceName = ''.obs;
+  final RxString role = 'viewer'.obs;
   final RxBool userExists = false.obs;
 
   @override
@@ -31,19 +32,21 @@ class LoginController extends GetxController {
     if (userJson != null) {
       try {
         final Map<String, dynamic> userMap = jsonDecode(userJson);
-        // copie dans l'instance partagée (Get.find) plutôt que de la remplacer
+        // copy into the shared instance (Get.find) rather than replacing it
         final loaded = User.fromJson(userMap);
         userData.id = loaded.id;
         userData.name = loaded.name;
         userData.password = loaded.password;
         userData.broker = loaded.broker;
         userData.deviceName = loaded.deviceName;
+        userData.role = loaded.role;
 
         // Update the observable variables
         name.value = userData.name;
         password.value = userData.password;
         broker.value = userData.broker;
         deviceName.value = userData.deviceName;
+        role.value = userData.role;
         userExists.value = true;
       } catch (e) {
         debugPrint('Error loading user data: $e');
@@ -51,10 +54,10 @@ class LoginController extends GetxController {
     }
   }
 
-  // Test de connexion
+  // Connection test
   final RxBool testing = false.obs;
   final RxString testError = ''.obs;
-  final RxInt testMs = (-1).obs; // -1 : pas de résultat positif
+  final RxInt testMs = (-1).obs; // -1: no positive result
 
   Future<void> testConnection(
       String broker, String name, String password) async {
@@ -77,7 +80,8 @@ class LoginController extends GetxController {
   }
 
   Future<void> saveUserData(
-      String name, String password, String broker) async {
+      String name, String password, String broker, String role) async {
+    userData.role = role;
     userData.name = name;
     userData.id = name;
     userData.password = password;

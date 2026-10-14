@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// Couleurs hors ColorScheme (jetons de la maquette oCamera).
+/// Colors outside ColorScheme (tokens from the oCamera mockup).
 class OcamColors extends ThemeExtension<OcamColors> {
   final Color surface2;
   final Color surface3;
@@ -65,7 +65,7 @@ extension OcamTheme on BuildContext {
 }
 
 class AppTheme {
-  /// Fond translucide des barres posées sur la vidéo.
+  /// Translucent background of the bars laid over the video.
   static const videoChrome = Color(0x9E0A0C0E);
 
   static ThemeData get dark => _build(

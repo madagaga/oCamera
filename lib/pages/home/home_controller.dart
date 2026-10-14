@@ -16,7 +16,7 @@ class HomeController extends GetxController {
 
   ///  The controller constructor.
   HomeController() {
-    // les états déjà reçus sont rejoués à l'abonnement
+    // states already received are replayed on subscription
     signalingService.onDeviceState = _onDeviceState;
   }
 
@@ -26,7 +26,7 @@ class HomeController extends GetxController {
     super.onClose();
   }
 
-  /// Sauvegarde la liste (appelée au retour d'un appel, pour l'aperçu).
+  /// Saves the list (called when returning from a call, for the preview).
   void saveDevices() {
     storageService.saveDevices(devices);
     devices.refresh();
@@ -42,7 +42,7 @@ class HomeController extends GetxController {
   void _onDeviceState(String id, Map<String, dynamic>? state) {
     if (id == signalingService.selfId) return;
     if (state == null) {
-      // payload vide : l'administrateur a retiré l'appareil
+      // empty payload: the administrator removed the device
       devices.remove(id);
     } else {
       devices.putIfAbsent(id, () => Device(id)).applyState(state);

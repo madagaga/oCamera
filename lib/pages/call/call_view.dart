@@ -2,9 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:get/get.dart';
 import 'package:rtc/pages/call/call_controller.dart';
+import 'package:rtc/models/devices.dart';
 import 'package:rtc/theme/app_theme.dart';
 
-/// Vue live : vidéo plein écran, barres translucides masquées après 4 s.
+/// Live view: full-screen video, translucent bars hidden after 4 s.
 class CallView extends GetView<CallController> {
   const CallView({super.key});
 
@@ -27,20 +28,20 @@ class CallView extends GetView<CallController> {
               behavior: HitTestBehavior.opaque,
               onTap: controller.toggleControls,
               onDoubleTap: controller.resetZoom,
-              // Pas d'InteractiveViewer : la texture vidéo n'y est pas dessinée
-              // (écran noir) sur les appareils testés.
-              // RTCVideoView choisit « texture ou vide » une seule fois à sa
-              // construction : on le reconstruit à chaque changement du renderer,
-              // sinon il peut rester vide (écran noir) si le flux arrive après.
+              // No InteractiveViewer: the video texture is not drawn inside it
+              // (black screen) on the tested devices.
+              // RTCVideoView picks "texture or empty" only once at
+              // construction: rebuild it on every renderer change,
+              // otherwise it may stay empty (black screen) if the stream arrives later.
               child: InteractiveViewer(
                 transformationController: controller.zoom,
                 minScale: 1.0,
                 maxScale: 4.0,
                 child: RepaintBoundary(
                   key: controller.videoRenderKey,
-                  // RTCVideoView choisit « texture ou vide » une seule fois à sa
-                  // construction : on le reconstruit à chaque changement du
-                  // renderer, sinon il peut rester vide (écran noir).
+                  // RTCVideoView picks "texture or empty" only once at its
+                  // construction: rebuild it on every renderer change,
+                  // otherwise it may stay empty (black screen).
                   child: ValueListenableBuilder<RTCVideoValue>(
                     valueListenable: controller.remoteRTCVideoRenderer,
                     builder: (_, __, ___) =>
@@ -140,9 +141,42 @@ class CallView extends GetView<CallController> {
                 ],
               ),
             ),
+            _qualityMenu(),
           ],
         ),
       );
+
+  /// SD / HD switch, shown when the camera offers several streams.
+  Widget _qualityMenu() {
+    final d = controller.target.value;
+    if (d.caps.streams.length < 2) return const SizedBox.shrink();
+    return PopupMenuButton<String>(
+      tooltip: 'Quality',
+      onSelected: controller.changeStream,
+      itemBuilder: (_) => [
+        for (final name in d.caps.streams)
+          CheckedPopupMenuItem(
+            value: name,
+            checked: name == d.activeStream,
+            child: Text(streamLabel(name)),
+          ),
+      ],
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+            border: Border.all(color: const Color(0x66FFFFFF)),
+            borderRadius: BorderRadius.circular(16)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Text(streamLabel(d.activeStream ?? d.caps.streams.first),
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600)),
+          const Icon(Icons.arrow_drop_down, color: Colors.white, size: 18),
+        ]),
+      ),
+    );
+  }
 
   Widget _badge() {
     final label = controller.linkLabel.value;
@@ -224,6 +258,50 @@ class CallView extends GetView<CallController> {
     );
   }
 
+  /// Earpiece / loudspeaker / no sound selector.
+  Widget _audioMenu() {
+    IconData icon(AudioOutput o) => switch (o) {
+          AudioOutput.earpiece => Icons.phone_in_talk,
+          AudioOutput.speaker => Icons.volume_up,
+          AudioOutput.off => Icons.volume_off,
+        };
+    String label(AudioOutput o) => switch (o) {
+          AudioOutput.earpiece => 'Earpiece',
+          AudioOutput.speaker => 'Loudspeaker',
+          AudioOutput.off => 'No sound',
+        };
+    return Obx(() {
+      final current = controller.audioOutput.value;
+      return PopupMenuButton<AudioOutput>(
+        tooltip: 'Audio output',
+        onOpened: controller.showControls,
+        onSelected: (o) {
+          controller.showControls();
+          controller.setAudioOutput(o);
+        },
+        itemBuilder: (_) => [
+          for (final o in AudioOutput.values)
+            CheckedPopupMenuItem(
+              value: o,
+              checked: o == current,
+              child: Row(children: [
+                Icon(icon(o), size: 20),
+                const SizedBox(width: 12),
+                Text(label(o)),
+              ]),
+            ),
+        ],
+        child: Container(
+          width: 56,
+          height: 56,
+          decoration: const BoxDecoration(
+              color: Color(0x1FFFFFFF), shape: BoxShape.circle),
+          child: Icon(icon(current), color: Colors.white),
+        ),
+      );
+    });
+  }
+
   Widget _controlBar() {
     Widget round(IconData icon, String tip, VoidCallback onTap) => IconButton(
           tooltip: tip,
@@ -249,10 +327,7 @@ class CallView extends GetView<CallController> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Obx(() => round(
-              controller.enableAudio.value ? Icons.volume_up : Icons.volume_off,
-              controller.enableAudio.value ? 'Mute audio' : 'Unmute audio',
-              controller.toggleAudio)),
+          _audioMenu(),
           if (controller.canFlip)
             round(Icons.cameraswitch_outlined, 'Flip camera',
                 controller.remoteSwitchCamera),

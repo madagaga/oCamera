@@ -1,4 +1,4 @@
-/// Enveloppe des messages `in` (MQTT_PROTOCOL.md § 4).
+/// Envelope of `in` messages (MQTT_PROTOCOL.md § 4).
 class Envelope {
   static const int version = 1;
 
@@ -14,7 +14,7 @@ class Envelope {
 
   Envelope._(this.v, this.ts, this.sid, this.type, this.data);
 
-  /// Retourne `null` si le message n'est pas une enveloppe exploitable.
+  /// Returns `null` if the message is not a usable envelope.
   static Envelope? tryParse(dynamic json) {
     if (json is! Map<String, dynamic>) return null;
     final v = json['v'], ts = json['ts'], type = json['type'];
@@ -25,7 +25,7 @@ class Envelope {
         data is Map<String, dynamic> ? data : const {});
   }
 
-  /// Écart toléré entre l'horloge locale et `ts` : 30 s.
+  /// Tolerated gap between the local clock and `ts`: 30 s.
   bool get isFresh {
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     return (now - ts).abs() <= 30;

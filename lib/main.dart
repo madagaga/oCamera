@@ -1,5 +1,7 @@
 import 'package:permission_handler/permission_handler.dart';
 import 'package:rtc/pages/loading/loading_controller.dart';
+import 'package:rtc/services/camera_foreground.dart';
+import 'package:rtc/services/camera_service.dart';
 import 'package:rtc/services/signaling_channel.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
@@ -11,6 +13,7 @@ import 'theme/app_theme.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  CameraForeground.initPort();
   await GetStorage.init();
   await _initializePermissions();
   await _initializeServices();
@@ -34,7 +37,9 @@ Future _initializeServices() async {
   Get.put(storageService.loadDevices(), permanent: true);
 
   Get.put(storageService, permanent: true);
-  Get.put(SignalingService(), permanent: true);
+  final signaling = SignalingService();
+  Get.put(signaling, permanent: true);
+  Get.put(CameraService(signaling), permanent: true);
 }
 
 /// Root of the application. A viewer does not announce its presence
@@ -49,7 +54,7 @@ class OcameraApp extends StatelessWidget {
       onReady: () => Get.find<LoadingController>().initNaviationListener(),
       theme: AppTheme.light,
       darkTheme: AppTheme.dark,
-      // sombre par défaut, clair en option (menu de l'accueil)
+      // dark by default, light as an option (home menu)
       themeMode: GetStorage().read<String>('theme') == 'light'
           ? ThemeMode.light
           : ThemeMode.dark,

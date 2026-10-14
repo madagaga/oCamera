@@ -10,53 +10,53 @@ import 'package:get/get.dart';
 import '../../models/devices.dart';
 import '../../models/envelope.dart';
 import '../../models/ice_config.dart';
+import '../../routes/app_pages.dart';
+import '../../services/peer_session.dart';
 import '../../services/signaling_channel.dart';
 
-/// Viewer côté appel : une session (`sid`) avec une caméra, protocole v1.
+/// Call-side viewer: one session (`sid`) with a camera, protocol v1.
+enum AudioOutput { earpiece, speaker, off }
+
 class CallController extends GetxController {
   final SignalingService _signalingService = Get.find();
 
   Rx<Device> target = Rx<Device>(Device('--'));
   RxBool enableVideo = true.obs;
-  RxBool enableAudio = true.obs;
+  /// Where the camera audio goes: earpiece, loudspeaker or nowhere.
+  final Rx<AudioOutput> audioOutput = AudioOutput.earpiece.obs;
   RxBool connected = false.obs;
 
-  /// Message d'erreur affiché dans la vue ; non vide = session terminée en erreur.
+  /// Error message shown in the view; non-empty = session ended with an error.
   RxString error = ''.obs;
 
-  /// Barre de contrôle masquée automatiquement après 4 s.
+  /// Control bar hidden automatically after 4 s.
   final RxBool controlsVisible = true.obs;
 
-  /// Durée d'appel (`03:12`) et lien (`Direct · 2.4 Mb/s`), pour l'affichage.
+  /// Call duration (`03:12`) and link (`Direct · 2.4 Mb/s`), for display.
   final RxString elapsed = '00:00'.obs;
   final RxString linkLabel = ''.obs;
   final RxBool relayed = false.obs;
 
   final GlobalKey videoRenderKey = GlobalKey();
 
-  /// Zoom / déplacement de la vidéo (pincer ; double tap pour revenir à 1×).
+  /// Video zoom / pan (pinch; double tap to return to 1×).
   final TransformationController zoom = TransformationController();
 
   void resetZoom() => zoom.value = Matrix4.identity();
 
   webrtc.MediaStream? _remoteStream;
-  webrtc.RTCPeerConnection? _rtcPeerConnection;
+  PeerSession? _peer;
   final webrtc.RTCVideoRenderer remoteRTCVideoRenderer =
       webrtc.RTCVideoRenderer();
 
   final String _sid = _randomSid();
 
   bool _offerSent = false;
-  bool _remoteDescSet = false;
-  bool _gatheringDone = false;
   bool _byeSent = false;
-  bool _remoteEnded = false; // bye / error reçu : on ne renvoie pas de bye
+  bool _remoteEnded = false; // bye / error received: do not send a bye back
   bool _closed = false;
   bool _left = false;
 
-  final List<webrtc.RTCIceCandidate> _pendingRemoteCandidates = [];
-  final List<Map<String, dynamic>> _outCandidates = [];
-  Timer? _outTimer;
   Timer? _answerTimer;
   Timer? _disconnectTimer;
   Timer? _hideControlsTimer;
@@ -79,7 +79,7 @@ class CallController extends GetxController {
     return List.generate(12, (_) => chars[r.nextInt(chars.length)]).join();
   }
 
-  /// Boutons selon les capacités annoncées par la caméra.
+  /// Buttons according to the capabilities announced by the camera.
   bool get canFlip => target.value.caps.cmds.contains('flip');
   bool get canToggleVideo => target.value.isPhone;
 
@@ -110,17 +110,30 @@ class CallController extends GetxController {
     super.onClose();
   }
 
+  /// Call-style audio routing: the earpiece by default, the loudspeaker on
+  /// request ([AudioOutput.speaker]). Routing is driven by setSpeakerphoneOn, which
+  /// needs the communication audio mode.
   Future<void> _initializeAudio() async {
     await webrtc.Helper.setAndroidAudioConfiguration(
       webrtc.AndroidAudioConfiguration(
-        androidAudioMode: webrtc.AndroidAudioMode.normal,
-        androidAudioStreamType: webrtc.AndroidAudioStreamType.music,
+        androidAudioMode: webrtc.AndroidAudioMode.inCommunication,
+        androidAudioStreamType: webrtc.AndroidAudioStreamType.voiceCall,
         androidAudioAttributesUsageType:
-            webrtc.AndroidAudioAttributesUsageType.media,
+            webrtc.AndroidAudioAttributesUsageType.voiceCommunication,
       ),
     );
-    webrtc.Helper.selectAudioOutput('speaker');
-    webrtc.Helper.setSpeakerphoneOnButPreferBluetooth();
+    await webrtc.Helper.setSpeakerphoneOn(audioOutput.value == AudioOutput.speaker);
+  }
+
+  /// Selects the audio output; [AudioOutput.off] mutes the camera audio.
+  Future<void> setAudioOutput(AudioOutput output) async {
+    audioOutput.value = output;
+    for (final track in _remoteStream?.getAudioTracks() ?? []) {
+      track.enabled = output != AudioOutput.off;
+    }
+    if (output != AudioOutput.off) {
+      await webrtc.Helper.setSpeakerphoneOn(output == AudioOutput.speaker);
+    }
   }
 
   Future<void> _startCall() async {
@@ -131,41 +144,25 @@ class CallController extends GetxController {
     }
     target.value = args[0] as Device;
 
-    final pc = await webrtc.createPeerConnection({
-      'iceServers':
+    final peer = PeerSession(
+      iceServers:
           _signalingService.iceConfig?.servers ?? IceConfig.defaultServers,
-    });
-    _rtcPeerConnection = pc;
+      sendIce: (cands, end) => _signalingService.sendTo(
+        target.value.id,
+        Envelope('ice', {'candidates': cands, 'end': end}, sid: _sid),
+      ),
+      onConnectionState: _onConnectionState,
+      onRemoteVideo: (stream) {
+        _remoteStream = stream;
+        remoteRTCVideoRenderer.srcObject = stream;
+        // re-apply the selected output (e.g. "No sound" chosen before the stream arrived)
+        setAudioOutput(audioOutput.value);
+      },
+    );
+    _peer = peer;
+    await peer.init();
 
-    pc.onIceCandidate = _queueLocalCandidate;
-    pc.onIceGatheringState = (state) {
-      if (state == webrtc.RTCIceGatheringState.RTCIceGatheringStateComplete) {
-        _gatheringDone = true;
-        _flushLocalCandidates(end: true);
-      }
-    };
-    pc.onConnectionState = _onConnectionState;
-    // Unified Plan : les médias arrivent par `onTrack` (onAddStream n'est
-    // plus déclenché de façon fiable).
-    pc.onTrack = (event) async {
-      debugPrint('[RTC] track ${event.track.kind}, streams=${event.streams.length}');
-      // L'audio est lu par la PeerConnection elle-même ; le renderer ne sert
-      // qu'à la vidéo. Brancher le flux deux fois (audio puis vidéo)
-      // réinitialisait le rendu natif et pouvait laisser un écran noir.
-      if (event.track.kind != 'video' || _remoteStream != null) return;
-      var stream = event.streams.isNotEmpty ? event.streams.first : null;
-      if (stream == null) {
-        // la caméra n'a pas annoncé de flux (msid) : on en fabrique un
-        stream = await webrtc.createLocalMediaStream('remote');
-        await stream.addTrack(event.track);
-      }
-      _remoteStream = stream;
-      remoteRTCVideoRenderer.srcObject = stream;
-    };
-    pc.onIceConnectionState =
-        (state) => debugPrint('[RTC] ice connection: $state');
-
-    await _createOffer(pc);
+    await _createOffer(peer);
   }
 
   void _onConnectionState(webrtc.RTCPeerConnectionState state) {
@@ -182,7 +179,7 @@ class CallController extends GetxController {
         }
         break;
       case webrtc.RTCPeerConnectionState.RTCPeerConnectionStateDisconnected:
-        // la connexion peut se rétablir seule : on laisse 10 s
+        // the connection may recover on its own: allow 10 s
         _disconnectTimer ??=
             Timer(_disconnectGrace, () => hangup('ice_failed'));
         break;
@@ -194,27 +191,28 @@ class CallController extends GetxController {
     }
   }
 
-  Future<void> _createOffer(webrtc.RTCPeerConnection pc) async {
-    final offer = await pc.createOffer({
-      'mandatory': {'OfferToReceiveAudio': true, 'OfferToReceiveVideo': true}
-    });
-    await pc.setLocalDescription(offer);
+  Future<void> _createOffer(PeerSession peer) async {
+    final sdp = await peer.createOffer();
     if (_closed) return;
 
     _signalingService.sendTo(
       target.value.id,
       Envelope('offer', {
-        'sdp': offer.sdp,
-        'want': {'audio': true},
+        'sdp': sdp,
+        'want': {
+          'audio': true,
+          // only when the user chose one; otherwise the camera picks its default
+          if (target.value.stream != null) 'stream': target.value.stream,
+        },
       }, sid: _sid),
     );
     _offerSent = true;
     _answerTimer = Timer(
         _answerTimeout, () => _fail('No answer from the camera', 'timeout'));
-    _flushLocalCandidates(end: _gatheringDone);
+    peer.markSignalingReady();
   }
 
-  // ---- messages entrants -------------------------------------------------
+  // ---- incoming messages -------------------------------------------------
 
   void _onInbox(String fromId, Envelope env) {
     if (_closed || fromId != target.value.id) return;
@@ -223,7 +221,7 @@ class CallController extends GetxController {
       _onCommandResult(env.data);
       return;
     }
-    // tout autre message doit appartenir à l'appel en cours
+    // any other message must belong to the current call
     if (env.sid != _sid) return;
 
     switch (env.type) {
@@ -244,55 +242,24 @@ class CallController extends GetxController {
   }
 
   Future<void> _onAnswer(Map<String, dynamic> data) async {
-    final pc = _rtcPeerConnection;
+    final peer = _peer;
     final sdp = data['sdp'];
-    if (pc == null || _remoteDescSet || sdp is! String) return;
+    if (peer == null || sdp is! String) return;
     _answerTimer?.cancel();
     try {
-      await pc
-          .setRemoteDescription(webrtc.RTCSessionDescription(sdp, 'answer'));
+      await peer.setRemoteAnswer(sdp);
     } catch (e) {
       _fail('Invalid answer from the camera', 'user');
-      return;
     }
-    _remoteDescSet = true;
-    // candidats arrivés avant la réponse (trickle)
-    for (final c in _pendingRemoteCandidates) {
-      await _addCandidate(c);
-    }
-    _pendingRemoteCandidates.clear();
   }
 
   Future<void> _onIce(Map<String, dynamic> data) async {
     final list = data['candidates'];
-    if (list is! List) return;
-    for (final item in list) {
-      if (item is! Map || item['candidate'] is! String) continue;
-      final cand = webrtc.RTCIceCandidate(
-        item['candidate'] as String,
-        item['sdpMid'] as String?,
-        item['sdpMLineIndex'] as int?,
-      );
-      if (_remoteDescSet) {
-        await _addCandidate(cand);
-      } else {
-        _pendingRemoteCandidates.add(cand);
-      }
-    }
-  }
-
-  Future<void> _addCandidate(webrtc.RTCIceCandidate cand) async {
-    final pc = _rtcPeerConnection;
-    if (pc == null) return;
-    try {
-      await pc.addCandidate(cand);
-    } catch (e) {
-      debugPrint('addCandidate failed: $e');
-    }
+    if (list is List) await _peer?.addRemoteCandidates(list);
   }
 
   void _onError(Map<String, dynamic> data) {
-    // une `error` termine la session : jamais suivie d'un `bye`
+    // an `error` ends the session: never followed by a `bye`
     _remoteEnded = true;
     final code = data['code']?.toString() ?? '';
     final message = switch (code) {
@@ -306,9 +273,9 @@ class CallController extends GetxController {
     _showError(message);
   }
 
-  // ---- fin de session ----------------------------------------------------
+  // ---- session end -------------------------------------------------------
 
-  /// Termine l'appel côté viewer (bouton, `bye` reçu, perte de connexion).
+  /// Ends the call on the viewer side (button, `bye` received, connection lost).
   Future<void> hangup([String reason = 'user']) async {
     if (_left) return;
     _sendBye(reason);
@@ -316,13 +283,13 @@ class CallController extends GetxController {
     _leave();
   }
 
-  /// Échec local : on prévient la caméra, puis on affiche l'erreur avant de quitter.
+  /// Local failure: notify the camera, then show the error before leaving.
   Future<void> _fail(String message, String reason) async {
     _sendBye(reason);
     await _showError(message);
   }
 
-  /// Libère l'appel mais reste sur l'écran pour afficher [message].
+  /// Releases the call but stays on screen to display [message].
   Future<void> _showError(String message) async {
     error.value = message;
     await _teardown();
@@ -346,7 +313,6 @@ class CallController extends GetxController {
     _closed = true;
     _answerTimer?.cancel();
     _disconnectTimer?.cancel();
-    _outTimer?.cancel();
     _hideControlsTimer?.cancel();
     _statsTimer?.cancel();
     for (final t in _pendingCmds.values) {
@@ -359,7 +325,7 @@ class CallController extends GetxController {
     final remote = _remoteStream;
     _remoteStream = null;
     if (remote != null) {
-      // l'aperçu doit être pris avant de détacher le flux
+      // the preview must be captured before detaching the stream
       await captureSnapshot();
       remoteRTCVideoRenderer.srcObject = null;
       for (final track in remote.getTracks()) {
@@ -368,46 +334,13 @@ class CallController extends GetxController {
       await remote.dispose();
     }
 
-    final pc = _rtcPeerConnection;
-    _rtcPeerConnection = null;
-    if (pc != null) {
-      await pc.close();
-      debugPrint('RTCPeerConnection closed');
-    }
+    final peer = _peer;
+    _peer = null;
+    await peer?.close();
     connected.value = false;
   }
 
-  // ---- ICE sortant -------------------------------------------------------
-
-  void _queueLocalCandidate(webrtc.RTCIceCandidate c) {
-    final text = c.candidate;
-    if (text == null || text.isEmpty) return;
-    _outCandidates.add({
-      'candidate': text,
-      'sdpMid': c.sdpMid,
-      'sdpMLineIndex': c.sdpMLineIndex,
-    });
-    // regroupés par fenêtres de ~100 ms
-    _outTimer ??=
-        Timer(const Duration(milliseconds: 100), _flushLocalCandidates);
-  }
-
-  void _flushLocalCandidates({bool end = false}) {
-    _outTimer?.cancel();
-    _outTimer = null;
-    if (!_offerSent || _closed) return; // renvoyé après l'offre
-    if (_outCandidates.isEmpty && !end) return;
-    _signalingService.sendTo(
-      target.value.id,
-      Envelope('ice', {
-        'candidates': List.of(_outCandidates),
-        'end': end,
-      }, sid: _sid),
-    );
-    _outCandidates.clear();
-  }
-
-  // ---- affichage ---------------------------------------------------------
+  // ---- display -----------------------------------------------------------
 
   void showControls() {
     controlsVisible.value = true;
@@ -420,12 +353,17 @@ class CallController extends GetxController {
   void toggleControls() =>
       controlsVisible.value ? controlsVisible.value = false : showControls();
 
+  static String _codecName(String mime) {
+    final name = mime.split('/').last.toUpperCase();
+    return name == 'H264' ? 'H.264' : name == 'H265' ? 'H.265' : name;
+  }
+
   static num? _num(dynamic v) => v is num ? v : num.tryParse('$v');
 
-  /// Type de lien (direct / relayé) et débit vidéo, depuis `getStats()`.
+  /// Link type (direct / relayed) and video bitrate, from `getStats()`.
   Future<void> _pollStats() async {
-    final pc = _rtcPeerConnection;
-    if (pc == null) return;
+    final peer = _peer;
+    if (peer == null) return;
     try {
       final start = _connectedAt;
       if (start != null) {
@@ -434,10 +372,11 @@ class CallController extends GetxController {
         elapsed.value = '${two(d.inMinutes)}:${two(d.inSeconds % 60)}';
       }
 
-      final reports = await pc.getStats();
+      final reports = await peer.getStats();
       final byId = {for (final r in reports) r.id: r};
       num bytes = 0;
       bool? isRelay;
+      String? codecId;
       for (final r in reports) {
         final v = r.values;
         if (r.type == 'candidate-pair' &&
@@ -449,8 +388,13 @@ class CallController extends GetxController {
         } else if (r.type == 'inbound-rtp' &&
             ('${v['kind']}' == 'video' || '${v['mediaType']}' == 'video')) {
           bytes = _num(v['bytesReceived']) ?? bytes;
+          codecId = v['codecId']?.toString();
         }
       }
+
+      // negotiated video codec, e.g. "video/H264" -> "H.264"
+      final mime = byId[codecId]?.values['mimeType']?.toString();
+      final codec = mime == null ? '' : ' · ${_codecName(mime)}';
 
       final now = DateTime.now();
       var rate = '';
@@ -468,14 +412,14 @@ class CallController extends GetxController {
       _lastStatsAt = now;
       if (isRelay != null) {
         relayed.value = isRelay;
-        linkLabel.value = '${isRelay ? 'Relayed' : 'Direct'}$rate';
+        linkLabel.value = '${isRelay ? 'Relayed' : 'Direct'}$codec$rate';
       }
     } catch (e) {
       debugPrint('getStats failed: $e');
     }
   }
 
-  // ---- commandes ---------------------------------------------------------
+  // ---- commands ----------------------------------------------------------
 
   void _sendCommand(String name, [Map<String, dynamic>? args]) {
     final id = 'c-${++_cmdCounter}';
@@ -497,21 +441,29 @@ class CallController extends GetxController {
     Get.snackbar('Command failed', msg ?? 'The camera refused the command');
   }
 
+  /// Restarts the call with another stream (SD / HD). The camera allows one
+  /// session at a time, so the current one is closed first.
+  Future<void> changeStream(String name) async {
+    final device = target.value;
+    if (_left || name == device.activeStream) return;
+    device.stream = name;
+    _sendBye('user');
+    await _teardown();
+    _left = true;
+    Get.back();
+    // let the old route and its controller go before building the new one
+    await Future.delayed(const Duration(milliseconds: 350));
+    Get.toNamed(Routes.CALL, arguments: [device]);
+  }
+
   void remoteSwitchCamera() => _sendCommand('flip');
 
-  // ---- médias ------------------------------------------------------------
+  // ---- media -------------------------------------------------------------
 
   void toggleVideo() {
     enableVideo.value = !enableVideo.value;
     for (final track in _remoteStream?.getVideoTracks() ?? []) {
       track.enabled = enableVideo.value;
-    }
-  }
-
-  void toggleAudio() {
-    enableAudio.value = !enableAudio.value;
-    for (final track in _remoteStream?.getAudioTracks() ?? []) {
-      track.enabled = enableAudio.value;
     }
   }
 

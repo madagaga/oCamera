@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-/// Capacités annoncées par une caméra (`caps` du message `state`).
+/// Capabilities announced by a camera (`caps` of the `state` message).
 class DeviceCaps {
   final List<String> video;
   final List<String> audio;
@@ -29,7 +29,7 @@ class DeviceCaps {
       {'video': video, 'audio': audio, 'streams': streams, 'cmds': cmds};
 }
 
-/// Une caméra, reconstruite depuis `ocam/dev/{id}/state` (parsing tolérant).
+/// A camera, rebuilt from `ocam/dev/{id}/state` (tolerant parsing).
 class Device {
   String id;
   String name;
@@ -40,6 +40,9 @@ class Device {
   DeviceCaps caps;
   String? agent;
   Uint8List snapshot = Uint8List(0);
+
+  /// Stream chosen by the user (`sub`, `main`…); null = camera default.
+  String? stream;
 
   Device(this.id,
       {String? name,
@@ -53,8 +56,12 @@ class Device {
 
   bool get isPhone => kind == 'phone';
 
-  /// Met à jour l'appareil depuis un `state`. Si `caps` est absent, les
-  /// dernières capacités connues sont conservées.
+  /// Stream used by the next call: the user's choice, else the camera default.
+  String? get activeStream =>
+      stream ?? (caps.streams.isEmpty ? null : caps.streams.first);
+
+  /// Updates the device from a `state`. If `caps` is missing, the
+  /// last known capabilities are kept.
   void applyState(Map<String, dynamic> j) {
     final n = j['name'];
     if (n is String && n.isNotEmpty) name = n;
@@ -74,7 +81,7 @@ class Device {
   factory Device.fromState(String id, Map<String, dynamic> j) =>
       Device(id)..applyState(j);
 
-  /// Persistance locale (liste des appareils + dernier aperçu).
+  /// Local persistence (device list + last preview).
   Map<String, dynamic> toJson() => {
         'id': id,
         'name': name,
@@ -82,9 +89,10 @@ class Device {
         'caps': caps.toJson(),
         'agent': agent,
         'snapshot': base64Encode(snapshot),
+        'stream': stream,
       };
 
-  /// Un appareil restauré est hors ligne tant que son `state` n'est pas reçu.
+  /// A restored device is offline until its `state` is received.
   factory Device.fromJson(Map<String, dynamic> j) {
     final d = Device(j['id'] as String, name: j['name'] as String?);
     d.kind = (j['kind'] as String?) ?? '';
@@ -92,8 +100,16 @@ class Device {
       d.caps = DeviceCaps.fromJson(j['caps'] as Map<String, dynamic>);
     }
     d.agent = j['agent'] as String?;
+    d.stream = j['stream'] as String?;
     final snap = j['snapshot'];
     if (snap is String && snap.isNotEmpty) d.snapshot = base64Decode(snap);
     return d;
   }
 }
+
+/// Display name of a stream: `sub` = SD, `main` = HD.
+String streamLabel(String name) => switch (name) {
+      'sub' => 'SD',
+      'main' => 'HD',
+      _ => name.toUpperCase(),
+    };

@@ -6,7 +6,7 @@ import '../../models/devices.dart';
 import '../../theme/app_theme.dart';
 import 'home_controller.dart';
 
-/// Écran d'accueil : état du broker + une vignette 16:9 par caméra.
+/// Home screen: broker status + one 16:9 thumbnail per camera.
 class HomeView extends GetView<HomeController> {
   const HomeView({super.key});
 
@@ -336,10 +336,18 @@ class _EmptyState extends StatelessWidget {
   }
 }
 
-class _DetailsSheet extends StatelessWidget {
+class _DetailsSheet extends StatefulWidget {
   final Device device;
   final VoidCallback onOpen;
   const _DetailsSheet({required this.device, required this.onOpen});
+
+  @override
+  State<_DetailsSheet> createState() => _DetailsSheetState();
+}
+
+class _DetailsSheetState extends State<_DetailsSheet> {
+  Device get device => widget.device;
+  VoidCallback get onOpen => widget.onOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -424,6 +432,19 @@ class _DetailsSheet extends StatelessWidget {
                 d.caps.streams.isEmpty
                     ? const Text('Default')
                     : chips(d.caps.streams)),
+            if (d.caps.streams.length > 1)
+              row(
+                'Quality',
+                SegmentedButton<String>(
+                  showSelectedIcon: false,
+                  segments: [
+                    for (final name in d.caps.streams)
+                      ButtonSegment(value: name, label: Text(streamLabel(name))),
+                  ],
+                  selected: {d.activeStream ?? d.caps.streams.first},
+                  onSelectionChanged: (v) => setState(() => d.stream = v.first),
+                ),
+              ),
             row(
                 'Supports',
                 Text(d.caps.cmds.isEmpty

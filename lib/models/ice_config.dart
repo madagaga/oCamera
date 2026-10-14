@@ -1,6 +1,6 @@
-/// Configuration ICE optionnelle (`ocam/config/ice`).
+/// Optional ICE configuration (`ocam/config/ice`).
 class IceConfig {
-  /// STUN public par défaut, sans identifiants.
+  /// Default public STUN, without credentials.
   static const List<Map<String, dynamic>> defaultServers = [
     {
       'urls': [
@@ -13,7 +13,7 @@ class IceConfig {
   final List<Map<String, dynamic>> servers;
   const IceConfig(this.servers);
 
-  /// Retourne `null` si le message est absent, vide ou invalide.
+  /// Returns `null` if the message is missing, empty or invalid.
   static IceConfig? tryParse(dynamic json) {
     if (json is! Map<String, dynamic>) return null;
     final servers = <Map<String, dynamic>>[];
@@ -34,7 +34,7 @@ class IceConfig {
               : <String>[];
       if (urls.isNotEmpty) {
         final entry = <String, dynamic>{'urls': urls};
-        // username / credential facultatifs
+        // username / credential optional
         if (turn['username'] is String) entry['username'] = turn['username'];
         if (turn['credential'] is String) {
           entry['credential'] = turn['credential'];

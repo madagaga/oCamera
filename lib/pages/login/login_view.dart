@@ -3,13 +3,13 @@ import 'package:get/get.dart';
 import 'package:rtc/pages/login/login_controller.dart';
 import 'package:rtc/theme/app_theme.dart';
 
-/// Écran de connexion au broker.
+/// Broker login screen.
 class LoginView extends GetView<LoginController> {
   LoginView({super.key}) {
     brokerController.text = controller.broker.value;
     userController.text = controller.name.value;
     passwordController.text = controller.password.value;
-    // valeurs rechargées depuis le stockage après la construction
+    // values reloaded from storage after construction
     ever(controller.broker, (v) => brokerController.text = v);
     ever(controller.name, (v) => userController.text = v);
     ever(controller.password, (v) => passwordController.text = v);
@@ -56,7 +56,34 @@ class LoginView extends GetView<LoginController> {
                         const SizedBox(height: 4),
                         Text('Connect to the broker that relays your cameras.',
                             style: TextStyle(fontSize: 14, color: oc.muted)),
-                        const SizedBox(height: 32),
+                        const SizedBox(height: 24),
+                        _label('Use this phone as', oc),
+                        Obx(() => SizedBox(
+                              width: double.infinity,
+                              child: SegmentedButton<String>(
+                                segments: const [
+                                  ButtonSegment(
+                                      value: 'viewer',
+                                      icon: Icon(Icons.visibility_outlined),
+                                      label: Text('Viewer')),
+                                  ButtonSegment(
+                                      value: 'camera',
+                                      icon: Icon(Icons.videocam_outlined),
+                                      label: Text('Camera')),
+                                ],
+                                selected: {controller.role.value},
+                                onSelectionChanged: (v) =>
+                                    controller.role.value = v.first,
+                              ),
+                            )),
+                        const SizedBox(height: 4),
+                        Obx(() => Text(
+                              controller.role.value == 'camera'
+                                  ? 'Use the camera account, not your viewer account.'
+                                  : 'Watch the cameras on your server.',
+                              style: TextStyle(fontSize: 12, color: oc.muted),
+                            )),
+                        const SizedBox(height: 20),
                         _label('Broker URL', oc),
                         TextFormField(
                           controller: brokerController,
@@ -158,7 +185,8 @@ class LoginView extends GetView<LoginController> {
     debugPrint('[Login] sign in');
     if (_formKey.currentState!.validate()) {
       controller.saveUserData(userController.text.trim(),
-          passwordController.text, brokerController.text.trim());
+          passwordController.text, brokerController.text.trim(),
+          controller.role.value);
     }
   }
 }

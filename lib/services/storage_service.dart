@@ -5,7 +5,7 @@ import 'package:get_storage/get_storage.dart';
 import 'package:rtc/models/devices.dart';
 import 'package:rtc/models/user.dart';
 
-/// Toutes les valeurs sont stockées sous forme de chaînes JSON.
+/// All values are stored as JSON strings.
 class StorageService {
   final storage = GetStorage();
 
