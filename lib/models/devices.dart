@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'battery_info.dart';
+
 /// Capabilities announced by a camera (`caps` of the `state` message).
 class DeviceCaps {
   final List<String> video;
@@ -39,6 +41,9 @@ class Device {
   String kind;
   DeviceCaps caps;
   String? agent;
+
+  /// Battery of a phone camera; null when the camera does not report one.
+  BatteryInfo? battery;
   Uint8List snapshot = Uint8List(0);
 
   /// Stream chosen by the user (`sub`, `main`…); null = camera default.
@@ -72,6 +77,7 @@ class Device {
     if (j['caps'] is Map<String, dynamic>) {
       caps = DeviceCaps.fromJson(j['caps'] as Map<String, dynamic>);
     }
+    battery = BatteryInfo.tryParse(j['battery']);
     final a = j['agent'];
     if (a is Map && a['name'] != null) {
       agent = '${a['name']} ${a['version'] ?? ''}'.trim();

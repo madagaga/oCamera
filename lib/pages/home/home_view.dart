@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:get_storage/get_storage.dart';
 
+import '../../models/battery_info.dart';
 import '../../models/devices.dart';
 import '../../theme/app_theme.dart';
 import 'home_controller.dart';
@@ -281,6 +282,10 @@ class _CameraTile extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 12),
+                    if (d.online && d.battery != null) ...[
+                      _BatteryBadge(d.battery!),
+                      const SizedBox(width: 12),
+                    ],
                     _Dot(dot),
                     const SizedBox(width: 6),
                     Text(status,
@@ -295,6 +300,42 @@ class _CameraTile extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Battery level of a phone camera: amber at 20 % or below, red at 10 %,
+/// unless it is plugged in.
+class _BatteryBadge extends StatelessWidget {
+  final BatteryInfo battery;
+  const _BatteryBadge(this.battery);
+
+  @override
+  Widget build(BuildContext context) {
+    final oc = context.oc;
+    final cs = Theme.of(context).colorScheme;
+    final low = !battery.charging && battery.level <= 20;
+    final critical = !battery.charging && battery.level <= 10;
+    final color = critical ? cs.error : low ? oc.inUse : oc.muted;
+    final icon = battery.charging
+        ? Icons.battery_charging_full
+        : battery.level <= 10
+            ? Icons.battery_alert
+            : battery.level <= 40
+                ? Icons.battery_2_bar
+                : battery.level <= 70
+                    ? Icons.battery_4_bar
+                    : Icons.battery_full;
+    return Semantics(
+      label: 'Battery ${battery.level} percent'
+          '${battery.charging ? ', plugged in' : ''}',
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 16, color: color),
+        const SizedBox(width: 2),
+        Text('${battery.level}%',
+            style: TextStyle(
+                fontSize: 12, fontWeight: FontWeight.w500, color: color)),
+      ]),
     );
   }
 }
@@ -425,6 +466,11 @@ class _DetailsSheetState extends State<_DetailsSheet> {
             const SizedBox(height: 16),
             Divider(color: cs.outline),
             row('Agent', Text(d.agent ?? 'Unknown')),
+            if (d.online && d.battery != null)
+              row(
+                  'Battery',
+                  Text(
+                      '${d.battery!.level} % · ${d.battery!.charging ? 'plugged in' : 'on battery'}')),
             row('Codecs',
                 codecs.isEmpty ? const Text('Not reported') : chips(codecs)),
             row(

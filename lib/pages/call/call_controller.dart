@@ -22,8 +22,8 @@ class CallController extends GetxController {
 
   Rx<Device> target = Rx<Device>(Device('--'));
   RxBool enableVideo = true.obs;
-  /// Where the camera audio goes: earpiece, loudspeaker or nowhere.
-  final Rx<AudioOutput> audioOutput = AudioOutput.earpiece.obs;
+  /// Where the camera audio goes: earpiece, loudspeaker or nowhere (default).
+  final Rx<AudioOutput> audioOutput = AudioOutput.off.obs;
   RxBool connected = false.obs;
 
   /// Error message shown in the view; non-empty = session ended with an error.

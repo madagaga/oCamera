@@ -9,6 +9,7 @@ import '../models/devices.dart';
 import '../models/envelope.dart';
 import '../models/ice_config.dart';
 import '../models/user.dart';
+import 'battery_monitor.dart';
 import 'hardware_codecs.dart';
 import 'peer_session.dart';
 import 'signaling_channel.dart';
@@ -47,6 +48,8 @@ class CameraService {
   /// Video codecs with a hardware encoder on this phone; only these are offered.
   List<String> _hwCodecs = const [];
 
+  late final BatteryMonitor _battery = BatteryMonitor((_) => _publishState());
+
   /// MQTT connection established, current session and its viewer.
   final RxBool mqttConnected = false.obs;
   final RxBool busy = false.obs;
@@ -70,6 +73,7 @@ class CameraService {
     if (running.value) return true;
     running.value = true;
     _hwCodecs = await HardwareCodecs.videoEncoders();
+    await _battery.start();
     _profile = CameraProfile(
       name: user.deviceName.isEmpty ? user.name : user.deviceName,
       caps: DeviceCaps(
@@ -98,6 +102,7 @@ class CameraService {
   Future<void> stop() async {
     if (!running.value) return;
     await _end('shutdown', sendBye: true);
+    _battery.stop();
     _signaling.publishState(_profile.state(online: false, busy: false));
     _signaling.onInbox = null;
     _signaling.onStale = null;
@@ -109,8 +114,11 @@ class CameraService {
   }
 
   void _publishState() {
-    _signaling.publishState(
-        _profile.state(online: true, busy: _sid != null, viewer: _viewer));
+    _signaling.publishState(_profile.state(
+        online: true,
+        busy: _sid != null,
+        viewer: _viewer,
+        battery: _battery.current));
   }
 
   // ---- incoming messages -------------------------------------------------

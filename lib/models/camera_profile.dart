@@ -1,3 +1,4 @@
+import 'battery_info.dart';
 import 'devices.dart';
 
 /// What a camera announces in its `state` (MQTT_PROTOCOL.md § 5).
@@ -15,7 +16,10 @@ class CameraProfile {
   });
 
   Map<String, dynamic> state(
-      {bool online = true, bool busy = false, String? viewer}) {
+      {bool online = true,
+      bool busy = false,
+      String? viewer,
+      BatteryInfo? battery}) {
     return {
       'v': 1,
       'ts': DateTime.now().millisecondsSinceEpoch ~/ 1000,
@@ -26,6 +30,7 @@ class CameraProfile {
       'kind': 'phone',
       'caps': caps.toJson(),
       'agent': {'name': agentName, 'version': agentVersion},
+      if (battery != null) 'battery': battery.toJson(),
     };
   }
 }

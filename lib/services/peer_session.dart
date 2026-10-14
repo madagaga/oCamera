@@ -104,8 +104,19 @@ class PeerSession {
     if (allowedVideoCodecs != null && RegExp(r'^m=video 0 ', multiLine: true).hasMatch(sdp)) {
       throw UnsupportedCodecError();
     }
+    debugPrint('[RTC] answer video codecs: ${_videoCodecNames(sdp)}');
     await pc.setLocalDescription(answer);
     return sdp;
+  }
+
+  /// Codec names of the video m-section of an SDP (for logging).
+  static String _videoCodecNames(String sdp) {
+    final video = RegExp(r'm=video[\s\S]*?(?=\r?\nm=|$)').stringMatch(sdp) ?? '';
+    return RegExp(r'a=rtpmap:\d+ ([A-Za-z0-9-]+)/')
+        .allMatches(video)
+        .map((m) => m.group(1)!)
+        .toSet()
+        .join(', ');
   }
 
   Future<void> _restrictVideoCodecs(

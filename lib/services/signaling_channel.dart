@@ -56,17 +56,23 @@ class SignalingService {
 
   String get selfId => _currentUser.id;
 
+  // Reconnection is handled here rather than by the library: its auto
+  // reconnect stops for good when a network error is thrown while the network
+  // is down (DNS failure, aborted socket), which left the camera offline until
+  // the app was reopened.
+  bool _wantConnected = false;
+  bool _everConnected = false;
+  int _retry = 0;
+  Timer? _retryTimer;
+
   SignalingService() {
     _client.setProtocolV311();
-    _client.autoReconnect = true;
-    _client.resubscribeOnAutoReconnect = true;
+    _client.autoReconnect = false;
     _client.keepAlivePeriod = 30;
+    // Without this a half-open connection (Wi-Fi gone, socket still open) is
+    // never noticed: drop it when a ping gets no answer for 10 s.
+    _client.disconnectOnNoResponsePeriod = 10;
     _client.onConnected = _onClientConnected;
-    // subscriptions are restored by the library (resubscribeOnAutoReconnect)
-    _client.onAutoReconnected = () {
-      connected.value = true;
-      onConnected?.call(true);
-    };
     _client.onDisconnected = _onClientDisconnected;
   }
 
@@ -105,23 +111,34 @@ class SignalingService {
     _client.clientIdentifier = _currentUser.id;
     _client.connectionMessage = connMessage;
 
+    _wantConnected = true;
     try {
       debugPrint('[MQTT] : connecting as ${_currentUser.name}');
       final result = await _client.connect();
       if (result?.state != MqttConnectionState.connected) {
-        onConnected?.call(false);
-        _client.disconnect();
+        _giveUp();
       }
     } on Exception catch (e) {
       debugPrint('[MQTT] : client exception - $e');
-      onConnected?.call(false);
-      _client.disconnect();
+      _giveUp();
     }
+  }
+
+  /// The first connection failed: report it, no retry loop.
+  void _giveUp() {
+    _wantConnected = false;
+    onConnected?.call(false);
+    _client.disconnect();
   }
 
   void _onClientConnected() {
     debugPrint('[MQTT] : connected');
-    _subscription ??= _client.updates!.listen(_onMessages);
+    // each successful connect() builds a new update stream
+    _subscription?.cancel();
+    _subscription = _client.updates!.listen(_onMessages);
+    _everConnected = true;
+    _retry = 0;
+    _retryTimer?.cancel();
     if (isCamera) {
       _client.subscribe('ocam/dev/$selfId/in/#', MqttQos.atLeastOnce);
     } else {
@@ -137,9 +154,38 @@ class SignalingService {
     debugPrint('[MQTT] : disconnected');
     connected.value = false;
     onConnected?.call(false);
+    _scheduleReconnect();
   }
 
-  void disconnect() => _client.disconnect();
+  /// Retries forever after a connection that had been established was lost:
+  /// 2, 4, 8, 16 s, then every 30 s.
+  void _scheduleReconnect() {
+    if (!_wantConnected || !_everConnected) return;
+    _retryTimer?.cancel();
+    final seconds = _retry >= 4 ? 30 : 2 << _retry;
+    _retry++;
+    debugPrint('[MQTT] : reconnecting in ${seconds}s (attempt $_retry)');
+    _retryTimer = Timer(Duration(seconds: seconds), _reconnect);
+  }
+
+  Future<void> _reconnect() async {
+    if (!_wantConnected) return;
+    try {
+      final result = await _client.connect();
+      if (result?.state == MqttConnectionState.connected) return;
+    } catch (e) {
+      debugPrint('[MQTT] : reconnect failed - $e');
+    }
+    _client.disconnect(); // may trigger onDisconnected, which reschedules
+    _scheduleReconnect();
+  }
+
+  void disconnect() {
+    _wantConnected = false;
+    _everConnected = false;
+    _retryTimer?.cancel();
+    _client.disconnect();
+  }
 
   void _onMessages(List<MqttReceivedMessage<MqttMessage?>>? messages) {
     if (messages == null) return;

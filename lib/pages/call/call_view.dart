@@ -5,6 +5,10 @@ import 'package:rtc/pages/call/call_controller.dart';
 import 'package:rtc/models/devices.dart';
 import 'package:rtc/theme/app_theme.dart';
 
+/// Temporarily hides the audio output selector (earpiece / loudspeaker /
+/// no sound) from the control bar. Audio stays muted (default "no sound").
+const bool kShowAudioControl = true;
+
 /// Live view: full-screen video, translucent bars hidden after 4 s.
 class CallView extends GetView<CallController> {
   const CallView({super.key});
@@ -327,7 +331,7 @@ class CallView extends GetView<CallController> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          _audioMenu(),
+          if (kShowAudioControl) _audioMenu(),
           if (controller.canFlip)
             round(Icons.cameraswitch_outlined, 'Flip camera',
                 controller.remoteSwitchCamera),

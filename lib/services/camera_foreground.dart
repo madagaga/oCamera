@@ -29,6 +29,13 @@ class _KeepAliveHandler extends TaskHandler {
   }
 }
 
+/// Keeps the Wi-Fi radio in high-performance mode. Measured on the Xiaomi
+/// camera phone: the lock held the radio awake 96 % of the time and
+/// accounted for roughly 200 of ~520 mAh over 3h20 of idle standby with the
+/// screen off. The CPU wake lock is kept, so MQTT stays connected; Wi-Fi power
+/// save only adds a few hundred ms to the first packet of a new session.
+const bool kHoldWifiLock = false;
+
 class CameraForeground {
   static const _serviceId = 4210;
 
@@ -47,7 +54,7 @@ class CameraForeground {
       foregroundTaskOptions: ForegroundTaskOptions(
         eventAction: ForegroundTaskEventAction.nothing(),
         allowWakeLock: true,
-        allowWifiLock: true,
+        allowWifiLock: kHoldWifiLock,
       ),
     );
   }
