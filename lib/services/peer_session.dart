@@ -12,6 +12,7 @@ class PeerSession {
     required this.sendIce,
     this.onConnectionState,
     this.onRemoteVideo,
+    this.onRemoteAudio,
   });
 
   final List<Map<String, dynamic>> iceServers;
@@ -20,6 +21,11 @@ class PeerSession {
   final void Function(List<Map<String, dynamic>> candidates, bool end) sendIce;
   final void Function(webrtc.RTCPeerConnectionState state)? onConnectionState;
   final void Function(webrtc.MediaStream stream)? onRemoteVideo;
+
+  /// The remote audio track, handed over as soon as it arrives so that the
+  /// app can mute it (the stream built from the video event does not always
+  /// list it).
+  final void Function(webrtc.MediaStreamTrack track)? onRemoteAudio;
 
   webrtc.RTCPeerConnection? _pc;
   webrtc.MediaStream? _remoteStream;
@@ -55,6 +61,10 @@ class PeerSession {
     // twice would reset the native rendering.
     pc.onTrack = (event) async {
       debugPrint('[RTC] track ${event.track.kind}, streams=${event.streams.length}');
+      if (event.track.kind == 'audio') {
+        onRemoteAudio?.call(event.track);
+        return;
+      }
       if (event.track.kind != 'video' || _remoteStream != null) return;
       var stream = event.streams.isNotEmpty ? event.streams.first : null;
       if (stream == null) {

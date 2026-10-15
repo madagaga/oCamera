@@ -5,7 +5,7 @@ import 'package:rtc/pages/call/call_controller.dart';
 import 'package:rtc/models/devices.dart';
 import 'package:rtc/theme/app_theme.dart';
 
-/// Shows the sound on / off button in the control bar. Audio is muted by
+/// Shows the audio output selector in the control bar. Audio is muted by
 /// default.
 const bool kShowAudioControl = true;
 
@@ -292,23 +292,54 @@ class CallView extends GetView<CallController> {
     );
   }
 
-  /// Sound on / off. The sound plays on the media volume, like a video player.
+  /// Output selector: the available outputs (Bluetooth or wired headset when
+  /// connected, loudspeaker, earpiece) and "No sound".
   Widget _audioToggle() {
+    IconData icon(String? id) => switch (id) {
+          'bluetooth' => Icons.bluetooth_audio,
+          'wired-headset' => Icons.headphones,
+          'speaker' => Icons.volume_up,
+          'earpiece' => Icons.phone_in_talk,
+          _ => Icons.volume_off,
+        };
+    String label(String? id) => switch (id) {
+          'bluetooth' => 'Bluetooth',
+          'wired-headset' => 'Headphones',
+          'speaker' => 'Loudspeaker',
+          'earpiece' => 'Earpiece',
+          _ => 'No sound',
+        };
     return Obx(() {
-      final on = controller.audioOutput.value == AudioOutput.speaker;
-      return IconButton(
-        tooltip: on ? 'Mute' : 'Turn the sound on',
-        iconSize: 24,
-        style: IconButton.styleFrom(
-          backgroundColor: const Color(0x1FFFFFFF),
-          fixedSize: const Size(56, 56),
-        ),
-        color: Colors.white,
-        icon: Icon(on ? Icons.volume_up : Icons.volume_off),
-        onPressed: () {
+      final current = controller.audioDevice.value;
+      return PopupMenuButton<String>(
+        tooltip: 'Audio output',
+        onOpened: () {
           controller.showControls();
-          controller.setAudioOutput(on ? AudioOutput.off : AudioOutput.speaker);
+          controller.refreshAudioOutputs();
         },
+        onSelected: (id) {
+          controller.showControls();
+          controller.setAudioDevice(id == 'off' ? null : id);
+        },
+        itemBuilder: (_) => [
+          for (final id in [...controller.audioOutputs, 'off'])
+            CheckedPopupMenuItem(
+              value: id,
+              checked: id == (current ?? 'off'),
+              child: Row(children: [
+                Icon(icon(id == 'off' ? null : id), size: 20),
+                const SizedBox(width: 12),
+                Text(label(id == 'off' ? null : id)),
+              ]),
+            ),
+        ],
+        child: Container(
+          width: 56,
+          height: 56,
+          decoration: const BoxDecoration(
+              color: Color(0x1FFFFFFF), shape: BoxShape.circle),
+          child: Icon(icon(current), color: Colors.white),
+        ),
       );
     });
   }
