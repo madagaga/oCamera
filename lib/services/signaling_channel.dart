@@ -1,313 +1,326 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:flutter/foundation.dart';
-import 'package:flutter_webrtc/flutter_webrtc.dart';
-
-import '../models/action_packet.dart';
-import '../models/devices.dart';
-import '../models/ice_packet.dart';
-import '../models/sdp_packet.dart';
-import '../models/user.dart';
-
 import 'dart:io';
+
+import 'package:flutter/foundation.dart';
+import 'package:get/get.dart';
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 
-typedef OfferReceivedCallback = Function(SdpPacket);
-typedef AnswerReceivedCallback = Function(SdpPacket);
-typedef IceCandidateReceivedCallback = Function(IcePacket);
-typedef ActionReceivedCallback = Function(ActionPacket);
-typedef DeviceReceivedCallback = Function(Device);
-typedef ConnectCallback = Function(bool);
+import '../models/camera_profile.dart';
+import '../models/envelope.dart';
+import '../models/ice_config.dart';
+import '../models/user.dart';
 
+/// A camera `state` received; empty payload = [removed].
+typedef DeviceStateCallback = void Function(String devId, Map<String, dynamic>? state);
+
+/// A message from the mailbox `ocam/cli/{self}/in/{fromId}`.
+typedef InboxCallback = void Function(String fromId, Envelope env);
+typedef ConnectCallback = void Function(bool);
+
+/// MQTT signaling, protocol version 1 (see MQTT_PROTOCOL.md).
 class SignalingService {
   final _client = MqttServerClient('', '', maxConnectionAttempts: 5);
 
   final User _currentUser = User();
-  final Device _currentDevice = Device('', '', '', true);
 
-  StreamSubscription<List<MqttReceivedMessage<MqttMessage?>>>?
-      streamSubscription;
+  StreamSubscription<List<MqttReceivedMessage<MqttMessage?>>>? _subscription;
 
-  DeviceReceivedCallback? _onNewDeviceFound;
-  set onNewDeviceFound(DeviceReceivedCallback? cb) {
-    _onNewDeviceFound = cb;
+  /// ICE configuration published by the administrator (optional).
+  IceConfig? iceConfig;
+
+  /// Latest `state` messages received; replayed to the subscriber (retained
+  /// states arrive before the home screen exists).
+  final Map<String, Map<String, dynamic>> _states = {};
+  DeviceStateCallback? _onDeviceState;
+  set onDeviceState(DeviceStateCallback? cb) {
+    _onDeviceState = cb;
+    if (cb != null) {
+      _states.forEach(cb);
+    }
   }
 
-  OfferReceivedCallback? _onOfferReceived;
-  set onOfferReceived(OfferReceivedCallback? cb) {
-    _onOfferReceived = cb;
-  }
+  InboxCallback? onInbox;
+  InboxCallback? onStale;
+  ConnectCallback? onConnected;
 
-  AnswerReceivedCallback? _onAnswerReceived;
-  set onAnswerReceived(AnswerReceivedCallback? cb) {
-    _onAnswerReceived = cb;
-  }
+  /// Set before [connect] to act as a camera (retained state + Last Will,
+  /// subscription to `ocam/dev/{self}/in/#`); `null` = viewer.
+  CameraProfile? cameraProfile;
 
-  IceCandidateReceivedCallback? _onIceCandidateReceived;
-  set onIceCandidateReceived(IceCandidateReceivedCallback? cb) {
-    _onIceCandidateReceived = cb;
-  }
+  bool get isCamera => cameraProfile != null;
 
-  ActionReceivedCallback? _onActionReceived;
-  set onActionReceived(ActionReceivedCallback? cb) {
-    _onActionReceived = cb;
-  }
+  /// MQTT connection state, for display.
+  final RxBool connected = false.obs;
 
-  ConnectCallback? _onConnected;
-  set onConnected(ConnectCallback? cb) {
-    _onConnected = cb;
-  }
+  String get selfId => _currentUser.id;
+
+  // Reconnection is handled here rather than by the library: its auto
+  // reconnect stops for good when a network error is thrown while the network
+  // is down (DNS failure, aborted socket), which left the camera offline until
+  // the app was reopened.
+  bool _wantConnected = false;
+  bool _everConnected = false;
+  int _retry = 0;
+  Timer? _retryTimer;
 
   SignalingService() {
-    /// Set logging on if needed, defaults to off
-    //_client.logging(on: true);
-
-    /// Set the correct MQTT protocol for mosquito
     _client.setProtocolV311();
-
-    /// Set auto reconnect
-    _client.autoReconnect = true;
-
-    _client.resubscribeOnAutoReconnect = true;
-
-    _client.keepAlivePeriod = 20;
+    _client.autoReconnect = false;
+    _client.keepAlivePeriod = 30;
+    // Without this a half-open connection (Wi-Fi gone, socket still open) is
+    // never noticed: drop it when a ping gets no answer for 10 s.
+    _client.disconnectOnNoResponsePeriod = 10;
     _client.onConnected = _onClientConnected;
     _client.onDisconnected = _onClientDisconnected;
   }
 
-  // waiting for the connection, if an error occurs, print it and disconnect
   Future<void> connect(User user) async {
-    if (!_currentUser.isValid()) {
-      _currentUser.id = user.id;
-      _currentUser.name = user.name;
-      _currentUser.password = user.password;
-      _currentUser.broker = user.broker;
+    _currentUser.id = user.name; // id = MQTT username
+    _currentUser.name = user.name;
+    _currentUser.password = user.password;
+    _currentUser.broker = user.broker;
+    _currentUser.deviceName = user.deviceName;
 
-      _currentDevice.id = user.id;
-      _currentDevice.name = user.deviceName;
-      _currentDevice.type = 'smartphone';
-    }
-
-    // if already connected cancel
     if (_client.connectionStatus?.state == MqttConnectionState.connected) {
       return;
     }
 
-    final connMessage = MqttConnectMessage()
+    // A viewer has no Last Will: it does not announce its presence. A camera
+    // has one: the broker publishes `online:false` if it disappears.
+    var connMessage = MqttConnectMessage()
         .authenticateAs(_currentUser.name, _currentUser.password)
-        .withWillTopic('willtopic')
-        .withWillMessage('Will message')
-        .startClean()
-        .withWillQos(MqttQos.atLeastOnce);
+        .startClean();
+    final profile = cameraProfile;
+    if (profile != null) {
+      connMessage = connMessage
+          .withWillTopic('ocam/dev/$selfId/state')
+          .withWillMessage(
+              jsonEncode(profile.state(online: false, busy: false)))
+          .withWillQos(MqttQos.atLeastOnce)
+          .withWillRetain();
+    }
 
-    _client.autoReconnect = true;
     final uri = Uri.parse(_currentUser.broker);
-
     _client.server = uri.host;
     _client.port = uri.port;
     _client.secure = true;
+    // The broker certificate is validated (no onBadCertificate).
     _client.securityContext = SecurityContext.defaultContext;
     _client.clientIdentifier = _currentUser.id;
     _client.connectionMessage = connMessage;
 
+    _wantConnected = true;
     try {
-      debugPrint('client connecting.... (${_currentUser.name}/${_currentUser.password})');
-      MqttClientConnectionStatus? result = await _client.connect();
-      if (result!.state != MqttConnectionState.connected &&
-          result.state != MqttConnectionState.connecting) {
-        if (_onConnected != null) {
-          _onConnected!(false);
-        }
-        return;
+      debugPrint('[MQTT] : connecting as ${_currentUser.name}');
+      final result = await _client.connect();
+      if (result?.state != MqttConnectionState.connected) {
+        _giveUp();
       }
-
-      _client.subscribe('/devices', MqttQos.atLeastOnce);
-      _client.subscribe('/${_currentUser.id}', MqttQos.atLeastOnce);
     } on Exception catch (e) {
-      if (_onConnected != null) {
-        _onConnected!(false);
-      }
       debugPrint('[MQTT] : client exception - $e');
-      _client.disconnect();
-    }
-
-    // when connected, print a confirmation, else print an error
-    if (_client.connectionStatus?.state == MqttConnectionState.connected) {
-      debugPrint('[MQTT] : client connected');
-    } else {
-      debugPrint(
-          '[MQTT] : ERROR client connection failed - disconnecting, status is ${_client.connectionStatus}');
-      _client.disconnect();
+      _giveUp();
     }
   }
 
+  /// The first connection failed: report it, no retry loop.
+  void _giveUp() {
+    _wantConnected = false;
+    onConnected?.call(false);
+    _client.disconnect();
+  }
+
   void _onClientConnected() {
-    try {
-      debugPrint('[MQTT] : connected');
-      heartBeat(true);
-
-      streamSubscription ??= _client.updates!.listen(_onNewMessageReceived);
-
-      if (_onConnected != null) {
-        _onConnected!(true);
-      }
-    } on Exception catch (e) {
-      debugPrint(e.toString());
+    debugPrint('[MQTT] : connected');
+    // each successful connect() builds a new update stream
+    _subscription?.cancel();
+    _subscription = _client.updates!.listen(_onMessages);
+    _everConnected = true;
+    _retry = 0;
+    _retryTimer?.cancel();
+    if (isCamera) {
+      _client.subscribe('ocam/dev/$selfId/in/#', MqttQos.atLeastOnce);
+    } else {
+      _client.subscribe('ocam/dev/+/state', MqttQos.atLeastOnce);
+      _client.subscribe('ocam/cli/$selfId/in/#', MqttQos.atLeastOnce);
+      _client.subscribe('ocam/config/ice', MqttQos.atLeastOnce);
     }
+    connected.value = true;
+    onConnected?.call(true);
   }
 
   void _onClientDisconnected() {
     debugPrint('[MQTT] : disconnected');
-    if (_onConnected != null) {
-      _onConnected!(false);
-    }
+    connected.value = false;
+    onConnected?.call(false);
+    _scheduleReconnect();
   }
 
-  void _onNewMessageReceived(List<MqttReceivedMessage<MqttMessage?>>? c) {
+  /// Retries forever after a connection that had been established was lost:
+  /// 2, 4, 8, 16 s, then every 30 s.
+  void _scheduleReconnect() {
+    if (!_wantConnected || !_everConnected) return;
+    _retryTimer?.cancel();
+    final seconds = _retry >= 4 ? 30 : 2 << _retry;
+    _retry++;
+    debugPrint('[MQTT] : reconnecting in ${seconds}s (attempt $_retry)');
+    _retryTimer = Timer(Duration(seconds: seconds), _reconnect);
+  }
+
+  Future<void> _reconnect() async {
+    if (!_wantConnected) return;
     try {
-      if (c == null) {
-        return;
+      final result = await _client.connect();
+      if (result?.state == MqttConnectionState.connected) return;
+    } catch (e) {
+      debugPrint('[MQTT] : reconnect failed - $e');
+    }
+    _client.disconnect(); // may trigger onDisconnected, which reschedules
+    _scheduleReconnect();
+  }
+
+  void disconnect() {
+    _wantConnected = false;
+    _everConnected = false;
+    _retryTimer?.cancel();
+    _client.disconnect();
+  }
+
+  void _onMessages(List<MqttReceivedMessage<MqttMessage?>>? messages) {
+    if (messages == null) return;
+    for (final m in messages) {
+      try {
+        _onMessage(m.topic, m.payload as MqttPublishMessage);
+      } catch (e) {
+        debugPrint('[MQTT] : bad message on ${m.topic} - $e');
       }
-
-      final recMess = c[0].payload as MqttPublishMessage;
-
-      final pt =
-          MqttPublishPayload.bytesToStringAsString(recMess.payload.message);
-      final data = jsonDecode(pt);
-      if (data is! Map<String, dynamic>) {
-        return;
-      }
-
-      if (data['source'] == _currentUser.id) {
-        debugPrint('[MQTT] :  ignoring echo');
-        return;
-      }
-
-      debugPrint(
-          '[MQTT] : New data arrived: topic is <${c[0].topic}>, payload is $pt');
-
-      switch ((data['type'] ?? '').toString()) {
-        case 'sdp':
-          final jsonData = data['data'];
-          if (jsonData is! Map<String, dynamic>) {
-            return;
-          }
-
-          final sdpType = (jsonData['type'] ?? '').toString();
-          if (sdpType == 'offer') {
-            if (_onOfferReceived == null) {
-              return;
-            }
-
-            _onOfferReceived!(SdpPacket(data['source'],
-                RTCSessionDescription(jsonData['sdp'], jsonData['type'])));
-          } else if (sdpType == 'answer') {
-            if (_onAnswerReceived == null) {
-              return;
-            }
-            _onAnswerReceived!(SdpPacket(data['source'],
-                RTCSessionDescription(jsonData['sdp'], jsonData['type'])));
-          }
-          break;
-        case 'ice':
-          if (_onIceCandidateReceived == null) {
-            return;
-          }
-          final jsonData = data['data'];
-          if (jsonData is! Map<String, dynamic>) {
-            return;
-          }
-          _onIceCandidateReceived!(IcePacket(
-              data['source'],
-              RTCIceCandidate(
-                  jsonData['candidate'] as String,
-                  jsonData['sdpMid'] as String,
-                  jsonData['sdpMLineIndex'] as int)));
-          break;
-        case 'hangup':
-        case 'flipCamera':
-        case 'error':
-          if (_onActionReceived == null) {
-            return;
-          }
-          _onActionReceived!(ActionPacket(data['source'] as String, data));
-          break;
-        case 'device':
-          if (_onNewDeviceFound == null) {
-            return;
-          }
-
-          final jsonData = data['data'];
-          if (jsonData is! Map<String, dynamic>) {
-            return;
-          }
-          Device u = Device.fromJson(jsonData, false);
-          _onNewDeviceFound!(u);
-          break;
-
-        case 'query':
-          heartBeat(true);
-          break;
-      }
-    } on Exception catch (e) {
-      debugPrint(e.toString());
     }
   }
 
-  void heartBeat(bool online) async {
-    _currentDevice.online = online;
-    final pkt = {'type': 'device', 'data': _currentDevice.toJson(false)};
-    _send('/devices', pkt);
-  }
+  void _onMessage(String topic, MqttPublishMessage msg) {
+    final raw = msg.payload.message;
+    final parts = topic.split('/');
+    if (parts.length < 3 || parts[0] != 'ocam') return;
 
-  void _send(String channel, Map<String, dynamic> data) {
-    if (_client.connectionStatus?.state != MqttConnectionState.connected) {
-      debugPrint('[MQTT] : skip send, client not connected ($channel)');
+    // camera: ocam/dev/{self}/in/{fromId}
+    if (isCamera) {
+      if (parts[1] == 'dev' && parts.length == 5 && parts[3] == 'in') {
+        _dispatchInbox(parts[4], raw);
+      }
       return;
     }
 
-    data['source'] = _currentUser.id;
-    final builder1 = MqttClientPayloadBuilder();
-    debugPrint('[MQTT] : Sending message to $channel : $data');
-    builder1.addString(jsonEncode(data));
-    _client.publishMessage(channel, MqttQos.atLeastOnce, builder1.payload!);
+    // ocam/dev/{id}/state
+    if (parts[1] == 'dev' && parts.length == 4 && parts[3] == 'state') {
+      final devId = parts[2];
+      if (raw.isEmpty) {
+        _states.remove(devId);
+        _onDeviceState?.call(devId, null); // device removed
+        return;
+      }
+      final json = jsonDecode(utf8.decode(raw));
+      if (json is Map<String, dynamic>) {
+        _states[devId] = json;
+        _onDeviceState?.call(devId, json);
+      }
+      return;
+    }
+
+    // ocam/config/ice (missing, empty or invalid = ignored)
+    if (parts[1] == 'config' && parts.length == 3 && parts[2] == 'ice') {
+      iceConfig = raw.isEmpty
+          ? null
+          : IceConfig.tryParse(jsonDecode(utf8.decode(raw)));
+      return;
+    }
+
+    // ocam/cli/{self}/in/{fromId}: the sender is the last level
+    if (parts[1] == 'cli' && parts.length == 5 && parts[3] == 'in') {
+      _dispatchInbox(parts[4], raw);
+    }
   }
 
-  void sendIceCandidate(String targetId, RTCIceCandidate iceCandidate) {
-    final pkt = {
-      "type": 'ice',
-      "data": iceCandidate.toMap(),
-    };
-
-    _send("/$targetId", pkt);
+  void _dispatchInbox(String fromId, List<int> raw) {
+    final env = Envelope.tryParse(jsonDecode(utf8.decode(raw)));
+    if (env == null) return;
+    if (env.v > Envelope.version) {
+      debugPrint('[MQTT] : ignoring message with v=${env.v}');
+      return;
+    }
+    if (!env.isFresh) {
+      debugPrint(
+          '[MQTT] : ignoring stale ${env.type} (ts=${env.ts}), check the clock');
+      // a stale offer gets an `error` (§ 4)
+      onStale?.call(fromId, env);
+      return;
+    }
+    onInbox?.call(fromId, env);
   }
 
-  void sendSDP(String targetId, RTCSessionDescription sdp) {
-    final pkt = {
-      "type": 'sdp',
-      "data": sdp.toMap(),
-    };
-
-    _send("/$targetId", pkt);
+  /// Publishes an envelope to the mailbox of camera `devId`.
+  void sendTo(String devId, Envelope env) {
+    if (_client.connectionStatus?.state != MqttConnectionState.connected) {
+      debugPrint('[MQTT] : skip send, client not connected (${env.type})');
+      return;
+    }
+    final builder = MqttClientPayloadBuilder()..addUTF8String(jsonEncode(env.toJson()));
+    _client.publishMessage(
+        'ocam/dev/$devId/in/$selfId', MqttQos.atLeastOnce, builder.payload!);
   }
 
-  void hangup(String targetId) {
-    final pkt = {
-      "type": 'hangup',
-    };
-    _send("/$targetId", pkt);
+  /// Camera: publishes an envelope to the mailbox of viewer `viewerId`.
+  void sendToViewer(String viewerId, Envelope env) {
+    if (_client.connectionStatus?.state != MqttConnectionState.connected) return;
+    final builder = MqttClientPayloadBuilder()
+      ..addUTF8String(jsonEncode(env.toJson()));
+    _client.publishMessage('ocam/cli/$viewerId/in/$selfId',
+        MqttQos.atLeastOnce, builder.payload!);
   }
 
-  void getDevices() {
-    final pkt = {'type': 'query'};
-    _send('/devices', pkt);
+  /// Camera: publishes its `state` (retained).
+  void publishState(Map<String, dynamic> state) {
+    if (_client.connectionStatus?.state != MqttConnectionState.connected) return;
+    final builder = MqttClientPayloadBuilder()..addUTF8String(jsonEncode(state));
+    _client.publishMessage('ocam/dev/$selfId/state', MqttQos.atLeastOnce,
+        builder.payload!,
+        retain: true);
   }
 
-  void flipCamera(String targetId) {
-    final pkt = {
-      "type": 'flipCamera',
-    };
-    _send("/$targetId", pkt);
+  /// Connection test from the login screen: `null` if the broker accepts
+  /// the credentials, otherwise a readable message. [onMs] receives the latency.
+  static Future<String?> testConnection(
+      User user, void Function(int ms) onMs) async {
+    final client = MqttServerClient('', '', maxConnectionAttempts: 1)
+      ..setProtocolV311()
+      ..autoReconnect = false
+      ..keepAlivePeriod = 30
+      ..secure = true
+      ..securityContext = SecurityContext.defaultContext;
+    try {
+      final uri = Uri.parse(user.broker);
+      client.server = uri.host;
+      client.port = uri.port;
+      client.clientIdentifier = user.name;
+      client.connectionMessage = MqttConnectMessage()
+          .authenticateAs(user.name, user.password)
+          .startClean();
+      final sw = Stopwatch()..start();
+      final result = await client.connect();
+      onMs(sw.elapsedMilliseconds);
+      if (result?.state == MqttConnectionState.connected) return null;
+      return switch (result?.returnCode) {
+        MqttConnectReturnCode.badUsernameOrPassword ||
+        MqttConnectReturnCode.notAuthorized =>
+          'The broker rejected these credentials.',
+        _ => 'The broker refused the connection.',
+      };
+    } on HandshakeException {
+      return "The broker's certificate isn't trusted.";
+    } catch (_) {
+      return 'Check the URL and that the broker is running.';
+    } finally {
+      client.disconnect();
+    }
   }
 }

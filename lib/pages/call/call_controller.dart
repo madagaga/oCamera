@@ -1,77 +1,132 @@
+import 'dart:async';
+import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart' as webrtc;
+import 'package:gal/gal.dart';
 import 'package:get/get.dart';
-import '../../models/action_packet.dart';
+import 'package:get_storage/get_storage.dart';
+import 'package:path_provider/path_provider.dart';
 import '../../models/devices.dart';
-import '../../models/ice_packet.dart';
-import '../../models/sdp_packet.dart';
+import '../../models/envelope.dart';
+import '../../models/ice_config.dart';
+import '../../models/recording_quality.dart';
+import '../../routes/app_pages.dart';
+import '../../services/peer_session.dart';
 import '../../services/signaling_channel.dart';
 
+/// Call-side viewer: one session (`sid`) with a camera, protocol v1.
+/// Camera audio: played on the media stream (one volume slider, like a video
+/// player), or muted.
+enum AudioOutput { speaker, off }
+
 class CallController extends GetxController {
-  /// The associated Signaling service.
   final SignalingService _signalingService = Get.find();
 
-  Rx<Device> target = Rx<Device>(Device('--', '---', '---', true));
+  Rx<Device> target = Rx<Device>(Device('--'));
   RxBool enableVideo = true.obs;
-  RxBool enableAudio = true.obs;
+  /// Where the camera audio goes: earpiece, loudspeaker or nowhere (default).
+  final Rx<AudioOutput> audioOutput = AudioOutput.off.obs;
   RxBool connected = false.obs;
+
+  /// Error message shown in the view; non-empty = session ended with an error.
   RxString error = ''.obs;
 
-  bool isIncomingCall = false;
-  bool enableVideoButton = false;
-  bool hangedUp = false;
+  /// Control bar hidden automatically after 4 s.
+  final RxBool controlsVisible = true.obs;
+
+  /// Call duration (`03:12`) and link (`Direct · 2.4 Mb/s`), for display.
+  final RxString elapsed = '00:00'.obs;
+  final RxString linkLabel = ''.obs;
+  final RxBool relayed = false.obs;
 
   final GlobalKey videoRenderKey = GlobalKey();
 
-  webrtc.MediaStream? _localStream;
+  /// Local recording of the received video (MP4 in the app storage).
+  final RxBool recording = false.obs;
+  final RxInt recordingSeconds = 0.obs;
+  webrtc.MediaRecorderNative? _recorder;
+  Timer? _recordTimer;
+  String? _recordPath;
+
+  /// Video zoom / pan (pinch; double tap to return to 1×).
+  final TransformationController zoom = TransformationController();
+
+  void resetZoom() => zoom.value = Matrix4.identity();
+
   webrtc.MediaStream? _remoteStream;
-  webrtc.RTCPeerConnection? _rtcPeerConnection;
+  PeerSession? _peer;
   final webrtc.RTCVideoRenderer remoteRTCVideoRenderer =
       webrtc.RTCVideoRenderer();
 
-  final String bandwidth = '75';
+  final String _sid = _randomSid();
 
-  ///  The controller constructor.
+  bool _offerSent = false;
+  bool _byeSent = false;
+  bool _remoteEnded = false; // bye / error received: do not send a bye back
+  bool _closed = false;
+  bool _left = false;
+
+  Timer? _answerTimer;
+  Timer? _disconnectTimer;
+  Timer? _hideControlsTimer;
+  Timer? _statsTimer;
+  DateTime? _connectedAt;
+  num _lastBytes = 0;
+  DateTime? _lastStatsAt;
+  final Map<String, Timer> _pendingCmds = {};
+  int _cmdCounter = 0;
+
+  static const _answerTimeout = Duration(seconds: 15);
+  static const _disconnectGrace = Duration(seconds: 10);
+  static const _cmdTimeout = Duration(seconds: 10);
+
   CallController();
+
+  static String _randomSid() {
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    final r = Random.secure();
+    return List.generate(12, (_) => chars[r.nextInt(chars.length)]).join();
+  }
+
+  /// Buttons according to the capabilities announced by the camera.
+  bool get canFlip => target.value.caps.cmds.contains('flip');
+  bool get canToggleVideo => target.value.isPhone;
 
   @override
   Future<void> onInit() async {
-    _initializeSignaling();
-    await _initializePeer();
     super.onInit();
+    _signalingService.onInbox = _onInbox;
+    await remoteRTCVideoRenderer.initialize();
+    remoteRTCVideoRenderer.addListener(() {
+      final v = remoteRTCVideoRenderer.value;
+      debugPrint('[RTC] renderer: ${v.width}x${v.height} renderVideo=${v.renderVideo}');
+    });
+    remoteRTCVideoRenderer.onFirstFrameRendered =
+        () => debugPrint('[RTC] first frame rendered');
+    await _initializeAudio();
+    await _startCall();
   }
 
   @override
-  void onClose() {
-    hangup();
-    remoteRTCVideoRenderer.dispose();
-    super.dispose();
-  }
-
-  void _initializeArguments() {
-    if (Get.arguments != null && Get.arguments is List) {
-      List args = Get.arguments;
-      if (args[0] is Device) {
-        target.value = args[0];
-        _createOffer();
-      } else if (args[0] is SdpPacket) {
-        target.value = args[1];
-        isIncomingCall = true;
-        _onOfferReceived(args[0]);
-      }
+  Future<void> onClose() async {
+    if (_signalingService.onInbox == _onInbox) {
+      _signalingService.onInbox = null;
     }
+    _sendBye('user');
+    await _teardown();
+    await remoteRTCVideoRenderer.dispose();
+    zoom.dispose();
+    super.onClose();
   }
 
-  void _initializeSignaling() {
-    _signalingService.onIceCandidateReceived = _onIceCandidateReceived;
-    _signalingService.onActionReceived = _onActionReceived;
-    _signalingService.onAnswerReceived = _onAnswerReceived;
-  }
-
+  /// Plays the camera audio on the media stream, like a video player: the
+  /// loudspeaker (or a connected headset) and the media volume slider. The
+  /// call mode would route to the earpiece but adds a second "call volume".
   Future<void> _initializeAudio() async {
     await webrtc.Helper.setAndroidAudioConfiguration(
       webrtc.AndroidAudioConfiguration(
@@ -81,271 +136,445 @@ class CallController extends GetxController {
             webrtc.AndroidAudioAttributesUsageType.media,
       ),
     );
-    webrtc.Helper.selectAudioOutput('speaker');
-    webrtc.Helper.setSpeakerphoneOnButPreferBluetooth();
+    await webrtc.Helper.setSpeakerphoneOnButPreferBluetooth();
   }
 
-  Future<void> _initializePeer() async {
-    _rtcPeerConnection = await webrtc.createPeerConnection({
-      'iceServers': [
-        {
-          'urls': [
-            'stun:stun1.l.google.com:19302',
-            'stun:stun2.l.google.com:19302'
-          ]
-        }
-      ]
-    });
-
-    _rtcPeerConnection!.onIceCandidate = (webrtc.RTCIceCandidate candidate) => {
-          if (candidate.candidate != null)
-            _signalingService.sendIceCandidate(target.value.id, candidate)
-          else
-            debugPrint("ice empty")
-        };
-
-    _rtcPeerConnection!.onConnectionState =
-        (webrtc.RTCPeerConnectionState state) {
-      debugPrint(' ********** $state');
-      switch (state) {
-        case webrtc.RTCPeerConnectionState.RTCPeerConnectionStateConnecting:
-          break;
-        case webrtc.RTCPeerConnectionState.RTCPeerConnectionStateConnected:
-          connected.value = true;
-          enableVideoButton = !isIncomingCall && target.value.type != "sender";
-          break;
-        case webrtc.RTCPeerConnectionState.RTCPeerConnectionStateFailed:
-        case webrtc.RTCPeerConnectionState.RTCPeerConnectionStateDisconnected:
-          hangup();
-          break;
-        default:
-          break;
-      }
-    };
-
-    _rtcPeerConnection!.onAddStream = (stream) {
-      _remoteStream = stream;
-      remoteRTCVideoRenderer.srcObject = _remoteStream;
-      // enableVideoButton =
-      //     !isIncomingCall.value && target.value.type != "sender";
-    };
-
-    _initializeArguments();
-    await _initializeAudio();
-  }
-
-  webrtc.RTCSessionDescription setBandwidthLimit(
-      webrtc.RTCSessionDescription packet) {
-    if (packet.sdp!.contains('b=AS:')) {
-      // insert b= after c= line.
-      packet.sdp =
-          packet.sdp!.replaceAllMapped(RegExp(r'c=IN (.*)\r\n'), (match) {
-        return 'b=AS:$bandwidth\r\nc=IN ${match.group(1)}\r\n';
-      });
-    } else {
-      packet.sdp =
-          packet.sdp!.replaceAll(RegExp(r'b=AS:.*\r\n'), 'b=AS:$bandwidth\r\n');
-    }
-    return packet;
-  }
-
-  Future<void> _createOffer() async {
-    await remoteRTCVideoRenderer.initialize();
-    webrtc.RTCSessionDescription offer = await _rtcPeerConnection!.createOffer({
-      'mandatory': {'OfferToReceiveAudio': true, 'OfferToReceiveVideo': true}
-    });
-    //offer = setBandwidthLimit(offer);
-
-    await _rtcPeerConnection!.setLocalDescription(offer);
-    _signalingService.sendSDP(target.value.id, offer);
-  }
-
-  void _onAnswerReceived(SdpPacket packet) async {
-    await _rtcPeerConnection!.setRemoteDescription(packet.sdp);
-  }
-
-  void _onOfferReceived(SdpPacket packet) async {
-// set SDP offer as remoteDescription for peerConnection
-    await _rtcPeerConnection!.setRemoteDescription(
-      packet.sdp,
-    );
-
-    // check if video should be enabled
-    //enableVideo.value = packet.sdp.sdp!.contains('m=video');
-
-    await _initializeStream();
-
-    // create SDP answer
-    webrtc.RTCSessionDescription answer =
-        await _rtcPeerConnection!.createAnswer();
-
-    //answer = setBandwidthLimit(answer);
-
-    // set SDP answer as localDescription for peerConnection
-    _rtcPeerConnection!.setLocalDescription(answer);
-
-    _signalingService.sendSDP(target.value.id, answer);
-  }
-
-  void _onIceCandidateReceived(IcePacket packet) {
-    // add iceCandidate
-    if (_rtcPeerConnection != null) {
-      _rtcPeerConnection!.addCandidate(packet.iceCandidate);
+  /// Selects the audio output; [AudioOutput.off] mutes the camera audio.
+  Future<void> setAudioOutput(AudioOutput output) async {
+    audioOutput.value = output;
+    for (final track in _remoteStream?.getAudioTracks() ?? []) {
+      track.enabled = output != AudioOutput.off;
     }
   }
 
-  Future<void> _initializeStream() async {
-    Map<String, dynamic> config = {
-      'video': {
-        'width': 640,
-        'height': 480,
-        'facingMode': 'user',
-        'frameRate': 10
+  Future<void> _startCall() async {
+    final args = Get.arguments;
+    if (args is! List || args.isEmpty || args[0] is! Device) {
+      _leave();
+      return;
+    }
+    target.value = args[0] as Device;
+
+    final peer = PeerSession(
+      iceServers:
+          _signalingService.iceConfig?.servers ?? IceConfig.defaultServers,
+      sendIce: (cands, end) => _signalingService.sendTo(
+        target.value.id,
+        Envelope('ice', {'candidates': cands, 'end': end}, sid: _sid),
+      ),
+      onConnectionState: _onConnectionState,
+      onRemoteVideo: (stream) {
+        _remoteStream = stream;
+        remoteRTCVideoRenderer.srcObject = stream;
+        // re-apply the selected output (e.g. "No sound" chosen before the stream arrived)
+        setAudioOutput(audioOutput.value);
       },
-      'audio': {
-        'mandatory': {
-          'noiseSuppression': false,
-          'echoCancellation': false,
-          'autoGainControl': false
-        }
-      }
-    };
+    );
+    _peer = peer;
+    await peer.init();
 
-    if (!enableVideo.value) {
-      config['video'] = false;
-    }
-
-    // get localStream
-    _localStream = await webrtc.navigator.mediaDevices.getUserMedia(config);
-
-    // add mediaTrack to peerConnection
-    _localStream!.getTracks().forEach((track) {
-      _rtcPeerConnection!.addTrack(track, _localStream!);
-    });
+    await _createOffer(peer);
   }
 
-  Future<void> hangup() async {
-    // Prevent multiple calls to hangup
-    if (hangedUp) return;
-    hangedUp = true;
-
-    debugPrint('Hanging up call with ${target.value.name}');
-
-    // Clean up local stream
-    if (_localStream != null) {
-      _localStream!.getTracks().forEach((track) {
-        track.stop();
-      });
-      _localStream!.dispose();
-      _localStream = null;
-      debugPrint('Local stream disposed');
+  void _onConnectionState(webrtc.RTCPeerConnectionState state) {
+    debugPrint(' ********** $state');
+    switch (state) {
+      case webrtc.RTCPeerConnectionState.RTCPeerConnectionStateConnected:
+        _disconnectTimer?.cancel();
+        _disconnectTimer = null;
+        if (!connected.value) {
+          connected.value = true;
+          _connectedAt = DateTime.now();
+          _statsTimer = Timer.periodic(const Duration(seconds: 2), (_) => _pollStats());
+          showControls();
+        }
+        break;
+      case webrtc.RTCPeerConnectionState.RTCPeerConnectionStateDisconnected:
+        // the connection may recover on its own: allow 10 s
+        _disconnectTimer ??=
+            Timer(_disconnectGrace, () => hangup('ice_failed'));
+        break;
+      case webrtc.RTCPeerConnectionState.RTCPeerConnectionStateFailed:
+        hangup('ice_failed');
+        break;
+      default:
+        break;
     }
+  }
 
-    // Capture snapshot before disposing remote stream
-    if (_remoteStream != null) {
-      try {
-        await captureSnapshot();
-        debugPrint('Snapshot captured');
-      } catch (e) {
-        debugPrint('Error capturing snapshot: $e');
-      }
+  Future<void> _createOffer(PeerSession peer) async {
+    final sdp = await peer.createOffer();
+    if (_closed) return;
 
-      // Now dispose the remote stream
-      _remoteStream!.getTracks().forEach((track) {
-        track.stop();
-      });
-      _remoteStream!.dispose();
-      _remoteStream = null;
-      debugPrint('Remote stream disposed');
+    _signalingService.sendTo(
+      target.value.id,
+      Envelope('offer', {
+        'sdp': sdp,
+        'want': {
+          'audio': true,
+          // only when the user chose one; otherwise the camera picks its default
+          if (target.value.stream != null) 'stream': target.value.stream,
+        },
+      }, sid: _sid),
+    );
+    _offerSent = true;
+    _answerTimer = Timer(
+        _answerTimeout, () => _fail('No answer from the camera', 'timeout'));
+    peer.markSignalingReady();
+  }
+
+  // ---- incoming messages -------------------------------------------------
+
+  void _onInbox(String fromId, Envelope env) {
+    if (_closed || fromId != target.value.id) return;
+
+    if (env.type == 'res') {
+      _onCommandResult(env.data);
+      return;
     }
+    // any other message must belong to the current call
+    if (env.sid != _sid) return;
 
-    // Close peer connection
-    if (_rtcPeerConnection != null) {
-      _rtcPeerConnection!.close();
-      _rtcPeerConnection = null;
-      debugPrint('RTCPeerConnection closed');
+    switch (env.type) {
+      case 'answer':
+        _onAnswer(env.data);
+        break;
+      case 'ice':
+        _onIce(env.data);
+        break;
+      case 'bye':
+        _remoteEnded = true;
+        hangup();
+        break;
+      case 'error':
+        _onError(env.data);
+        break;
     }
+  }
 
-    // Send hangup signal to the other device
-    if (target.value.id != '') {
-      _signalingService.hangup(target.value.id);
-      debugPrint('Hangup signal sent to ${target.value.id}');
+  Future<void> _onAnswer(Map<String, dynamic> data) async {
+    final peer = _peer;
+    final sdp = data['sdp'];
+    if (peer == null || sdp is! String) return;
+    _answerTimer?.cancel();
+    try {
+      await peer.setRemoteAnswer(sdp);
+    } catch (e) {
+      _fail('Invalid answer from the camera', 'user');
     }
+  }
 
-    // Update UI state
-    connected.value = false;
+  Future<void> _onIce(Map<String, dynamic> data) async {
+    final list = data['candidates'];
+    if (list is List) await _peer?.addRemoteCandidates(list);
+  }
 
-    // Navigate back
+  void _onError(Map<String, dynamic> data) {
+    // an `error` ends the session: never followed by a `bye`
+    _remoteEnded = true;
+    final code = data['code']?.toString() ?? '';
+    final message = switch (code) {
+      'busy' => 'The camera is already in use',
+      'bad_request' => 'The camera rejected the request',
+      'unsupported_codec' => 'No video codec in common with the camera',
+      'source_unavailable' => 'The camera video source is unreachable',
+      'stale' => 'Clock mismatch between this device and the camera',
+      _ => data['message']?.toString() ?? 'Unknown error',
+    };
+    _showError(message);
+  }
+
+  // ---- session end -------------------------------------------------------
+
+  /// Ends the call on the viewer side (button, `bye` received, connection lost).
+  Future<void> hangup([String reason = 'user']) async {
+    if (_left) return;
+    _sendBye(reason);
+    await _teardown();
+    _leave();
+  }
+
+  /// Local failure: notify the camera, then show the error before leaving.
+  Future<void> _fail(String message, String reason) async {
+    _sendBye(reason);
+    await _showError(message);
+  }
+
+  /// Releases the call but stays on screen to display [message].
+  Future<void> _showError(String message) async {
+    error.value = message;
+    await _teardown();
+  }
+
+  void _sendBye(String reason) {
+    if (_byeSent || _remoteEnded || !_offerSent) return;
+    _byeSent = true;
+    _signalingService.sendTo(
+        target.value.id, Envelope('bye', {'reason': reason}, sid: _sid));
+  }
+
+  void _leave() {
+    if (_left) return;
+    _left = true;
     Get.back();
   }
 
-  void _onActionReceived(ActionPacket packet) {
-    switch (packet.data['type']) {
-      case 'hangup':
-        hangup();
-        break;
-      case 'flipCamera':
-        switchCamera();
-        break;
-      case 'toggleCamera':
-        toggleVideo();
-        break;
-      case 'error':
-        final payload = packet.data['data'];
-        if (payload is Map && payload['message'] != null) {
-          error.value = payload['message'].toString();
-        } else if (packet.data['message'] != null) {
-          error.value = packet.data['message'].toString();
-        } else {
-          error.value = 'Unknown error';
-        }
-        break;
+  Future<void> _teardown() async {
+    if (_closed) return;
+    _closed = true;
+    _answerTimer?.cancel();
+    _disconnectTimer?.cancel();
+    _hideControlsTimer?.cancel();
+    _statsTimer?.cancel();
+    for (final t in _pendingCmds.values) {
+      t.cancel();
+    }
+    _pendingCmds.clear();
+
+    debugPrint('Hanging up call with ${target.value.name}');
+
+    // finish the file before the stream goes away
+    await stopRecording(silent: true);
+
+    final remote = _remoteStream;
+    _remoteStream = null;
+    if (remote != null) {
+      // the preview must be captured before detaching the stream
+      await captureSnapshot();
+      remoteRTCVideoRenderer.srcObject = null;
+      for (final track in remote.getTracks()) {
+        await track.stop();
+      }
+      await remote.dispose();
+    }
+
+    final peer = _peer;
+    _peer = null;
+    await peer?.close();
+    connected.value = false;
+  }
+
+  // ---- recording ---------------------------------------------------------
+
+  Future<void> toggleRecording() =>
+      recording.value ? stopRecording() : startRecording();
+
+  /// Records the received video to an MP4 file in the app storage. The audio
+  /// is included only when the sound is on at the moment recording starts.
+  ///
+  /// The plugin re-encodes the decoded frames in H.264 (it has no access to
+  /// the received packets), so this costs some CPU and battery.
+  Future<void> startRecording() async {
+    if (recording.value || _closed) return;
+    final tracks = _remoteStream?.getVideoTracks() ?? [];
+    if (tracks.isEmpty) {
+      Get.snackbar('Recording', 'The video is not ready yet');
+      return;
+    }
+    try {
+      final base = await getExternalStorageDirectory() ??
+          await getApplicationDocumentsDirectory();
+      final dir = Directory('${base.path}/recordings');
+      await dir.create(recursive: true);
+      final name = target.value.name.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+      final stamp = DateTime.now()
+          .toIso8601String()
+          .substring(0, 19)
+          .replaceAll(RegExp(r'[-:]'), '')
+          .replaceAll('T', '_');
+      final path = '${dir.path}/${name}_$stamp.mp4';
+
+      final quality = RecordingQuality.fromName(
+          GetStorage().read<String>(RecordingQuality.storageKey));
+      // MediaRecorderNative comes from the local plugin copy, which accepts a
+      // bitrate; the stock recorder always starts at 6 Mb/s.
+      final recorder = webrtc.MediaRecorderNative(
+          bitrate: quality.bitrate, frameRate: 15);
+      await recorder.start(
+        path,
+        videoTrack: tracks.first,
+        audioChannel: audioOutput.value == AudioOutput.off
+            ? null
+            : webrtc.RecorderAudioChannel.OUTPUT,
+      );
+      _recorder = recorder;
+      _recordPath = path;
+      recordingSeconds.value = 0;
+      recording.value = true;
+      _recordTimer = Timer.periodic(
+          const Duration(seconds: 1), (_) => recordingSeconds.value++);
+      debugPrint('[Record] started $path');
+    } catch (e) {
+      debugPrint('[Record] start failed: $e');
+      Get.snackbar('Recording', "Couldn't start the recording");
     }
   }
 
-  void switchCamera() {
-// switch camera
-    _localStream?.getVideoTracks().forEach((track) {
-      webrtc.Helper.switchCamera(track);
+  Future<void> stopRecording({bool silent = false}) async {
+    final recorder = _recorder;
+    if (recorder == null) return;
+    final path = _recordPath;
+    _recorder = null;
+    _recordPath = null;
+    _recordTimer?.cancel();
+    recording.value = false;
+    try {
+      await recorder.stop();
+      debugPrint('[Record] file written $path');
+      if (path == null) return;
+      // Android hides Android/data from file managers: copy the clip to the
+      // gallery (Movies/oCamera), then drop the private copy.
+      await Gal.putVideo(path, album: 'oCamera');
+      await File(path).delete();
+      debugPrint('[Record] saved to the gallery');
+      if (!silent) {
+        Get.snackbar('Recording saved', 'In your gallery, album "oCamera"');
+      }
+    } catch (e) {
+      debugPrint('[Record] stop failed: $e');
+      if (!silent) {
+        Get.snackbar('Recording', "The clip couldn't be saved to the gallery");
+      }
+    }
+  }
+
+  // ---- display -----------------------------------------------------------
+
+  void showControls() {
+    controlsVisible.value = true;
+    _hideControlsTimer?.cancel();
+    _hideControlsTimer = Timer(const Duration(seconds: 4), () {
+      if (connected.value && error.value.isEmpty) controlsVisible.value = false;
     });
   }
+
+  void toggleControls() =>
+      controlsVisible.value ? controlsVisible.value = false : showControls();
+
+  static String _codecName(String mime) {
+    final name = mime.split('/').last.toUpperCase();
+    return name == 'H264' ? 'H.264' : name == 'H265' ? 'H.265' : name;
+  }
+
+  static num? _num(dynamic v) => v is num ? v : num.tryParse('$v');
+
+  /// Link type (direct / relayed) and video bitrate, from `getStats()`.
+  Future<void> _pollStats() async {
+    final peer = _peer;
+    if (peer == null) return;
+    try {
+      final start = _connectedAt;
+      if (start != null) {
+        final d = DateTime.now().difference(start);
+        String two(int n) => n.toString().padLeft(2, '0');
+        elapsed.value = '${two(d.inMinutes)}:${two(d.inSeconds % 60)}';
+      }
+
+      final reports = await peer.getStats();
+      final byId = {for (final r in reports) r.id: r};
+      num bytes = 0;
+      bool? isRelay;
+      String? codecId;
+      for (final r in reports) {
+        final v = r.values;
+        if (r.type == 'candidate-pair' &&
+            '${v['nominated']}' == 'true' &&
+            '${v['state']}' == 'succeeded') {
+          final local = byId[v['localCandidateId']]?.values['candidateType'];
+          final remote = byId[v['remoteCandidateId']]?.values['candidateType'];
+          isRelay = local == 'relay' || remote == 'relay';
+        } else if (r.type == 'inbound-rtp' &&
+            ('${v['kind']}' == 'video' || '${v['mediaType']}' == 'video')) {
+          bytes = _num(v['bytesReceived']) ?? bytes;
+          codecId = v['codecId']?.toString();
+        }
+      }
+
+      // negotiated video codec, e.g. "video/H264" -> "H.264"
+      final mime = byId[codecId]?.values['mimeType']?.toString();
+      final codec = mime == null ? '' : ' · ${_codecName(mime)}';
+
+      final now = DateTime.now();
+      var rate = '';
+      final last = _lastStatsAt;
+      if (last != null) {
+        final secs = now.difference(last).inMilliseconds / 1000;
+        if (secs > 0 && bytes >= _lastBytes) {
+          final mbps = (bytes - _lastBytes) * 8 / secs / 1e6;
+          rate = mbps >= 1
+              ? ' · ${mbps.toStringAsFixed(1)} Mb/s'
+              : ' · ${(mbps * 1000).round()} kb/s';
+        }
+      }
+      _lastBytes = bytes;
+      _lastStatsAt = now;
+      if (isRelay != null) {
+        relayed.value = isRelay;
+        linkLabel.value = '${isRelay ? 'Relayed' : 'Direct'}$codec$rate';
+      }
+    } catch (e) {
+      debugPrint('getStats failed: $e');
+    }
+  }
+
+  // ---- commands ----------------------------------------------------------
+
+  void _sendCommand(String name, [Map<String, dynamic>? args]) {
+    final id = 'c-${++_cmdCounter}';
+    _pendingCmds[id] = Timer(_cmdTimeout, () {
+      _pendingCmds.remove(id);
+      Get.snackbar('Command', 'No answer from the camera');
+    });
+    _signalingService.sendTo(
+      target.value.id,
+      Envelope('cmd', {'id': id, 'name': name, if (args != null) 'args': args}),
+    );
+  }
+
+  void _onCommandResult(Map<String, dynamic> data) {
+    _pendingCmds.remove(data['id'])?.cancel();
+    if (data['ok'] == true) return;
+    final err = data['error'];
+    final msg = err is Map ? err['message']?.toString() : null;
+    Get.snackbar('Command failed', msg ?? 'The camera refused the command');
+  }
+
+  /// Restarts the call with another stream (SD / HD). The camera allows one
+  /// session at a time, so the current one is closed first.
+  Future<void> changeStream(String name) async {
+    final device = target.value;
+    if (_left || name == device.activeStream) return;
+    device.stream = name;
+    _sendBye('user');
+    await _teardown();
+    _left = true;
+    Get.back();
+    // let the old route and its controller go before building the new one
+    await Future.delayed(const Duration(milliseconds: 350));
+    Get.toNamed(Routes.CALL, arguments: [device]);
+  }
+
+  void remoteSwitchCamera() => _sendCommand('flip');
+
+  // ---- media -------------------------------------------------------------
 
   void toggleVideo() {
-    // change status
     enableVideo.value = !enableVideo.value;
-    // enable or disable video track
-    _remoteStream?.getVideoTracks().forEach((track) {
+    for (final track in _remoteStream?.getVideoTracks() ?? []) {
       track.enabled = enableVideo.value;
-    });
-  }
-
-  void remoteSwitchCamera() {
-    _signalingService.flipCamera(target.value.id);
-  }
-
-  void toggleAudio() {
-    enableAudio.value = !enableAudio.value;
-    // enable or disable video track
-    _remoteStream?.getAudioTracks().forEach((track) {
-      track.enabled = enableAudio.value;
-    });
+    }
   }
 
   Future<void> captureSnapshot() async {
     try {
-      if (videoRenderKey.currentContext != null) {
-        RenderRepaintBoundary boundary = videoRenderKey.currentContext!
-            .findRenderObject() as RenderRepaintBoundary;
-        ui.Image image = await boundary.toImage(pixelRatio: 3.0);
-        ByteData? byteData =
-            await image.toByteData(format: ui.ImageByteFormat.png);
-        Uint8List pngBytes = byteData!.buffer.asUint8List();
-
-        // Save the image to the device's documents directory
-        target.value.snapshot = pngBytes;
-        debugPrint('Snapshot saved');
-      } else {
-        debugPrint('VideoRenderKey is not set or context is null');
+      final context = videoRenderKey.currentContext;
+      if (context == null) return;
+      final boundary = context.findRenderObject() as RenderRepaintBoundary;
+      final ui.Image image = await boundary.toImage(pixelRatio: 1.0);
+      final ByteData? byteData =
+          await image.toByteData(format: ui.ImageByteFormat.png);
+      if (byteData != null) {
+        target.value.snapshot = byteData.buffer.asUint8List();
       }
     } catch (e) {
       debugPrint('Error capturing snapshot: $e');

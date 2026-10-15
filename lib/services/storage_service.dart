@@ -1,43 +1,48 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:get_storage/get_storage.dart';
 import 'package:rtc/models/devices.dart';
 import 'package:rtc/models/user.dart';
 
+/// All values are stored as JSON strings.
 class StorageService {
   final storage = GetStorage();
 
   User loadUser() {
-    String? data = storage.read<String>('currentUser');
-    User currentUser = User();
+    final data = storage.read<String>('currentUser');
     if (data != null) {
-      dynamic jsonData = jsonDecode(data);
-      currentUser = User.fromJson(jsonData);
+      try {
+        return User.fromJson(jsonDecode(data) as Map<String, dynamic>);
+      } catch (e) {
+        debugPrint('[Storage] invalid user data: $e');
+      }
     }
-    return currentUser;
+    return User();
   }
 
   void saveUser(User u) {
-    storage.write('currentUser', u.toJson());
+    storage.write('currentUser', jsonEncode(u.toJson()));
   }
 
   Map<String, Device> loadDevices() {
-    Map<String, Device> devices = {};
-    String? data = storage.read<String>('devices');
+    final devices = <String, Device>{};
+    final data = storage.read<String>('devices');
     if (data != null) {
-      dynamic jsonData = jsonDecode(data);
-      for (var item in jsonData) {
-        devices[item['id']] = Device.fromJson(item, true);
+      try {
+        for (final item in jsonDecode(data) as List) {
+          final d = Device.fromJson(item as Map<String, dynamic>);
+          devices[d.id] = d;
+        }
+      } catch (e) {
+        debugPrint('[Storage] invalid devices data: $e');
       }
     }
     return devices;
   }
 
   void saveDevices(Map<String, Device> devices) {
-    List<String> jsonDevices = [];
-    for (var item in devices.values) {
-      jsonDevices.add(jsonEncode(item.toJson(true)));
-    }
-    storage.write('devices', jsonDevices);
+    storage.write(
+        'devices', jsonEncode(devices.values.map((d) => d.toJson()).toList()));
   }
 }

@@ -13,4 +13,5 @@ abstract class Routes {
   static const LOGIN = "/login";
   static const POSITION = "/position";
   static const LOADING = "/loading";
+  static const CAMERA = "/camera";
 }
