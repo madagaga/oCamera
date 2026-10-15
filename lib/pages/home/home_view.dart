@@ -4,6 +4,7 @@ import 'package:get_storage/get_storage.dart';
 
 import '../../models/battery_info.dart';
 import '../../models/devices.dart';
+import '../../models/recording_quality.dart';
 import '../../theme/app_theme.dart';
 import 'home_controller.dart';
 
@@ -27,6 +28,8 @@ class HomeView extends GetView<HomeController> {
                 final dark = Get.isDarkMode;
                 Get.changeThemeMode(dark ? ThemeMode.light : ThemeMode.dark);
                 GetStorage().write('theme', dark ? 'light' : 'dark');
+              } else if (v == 'recording') {
+                _chooseRecordingQuality(context);
               } else if (v == 'logout') {
                 controller.disconnect();
               }
@@ -36,6 +39,8 @@ class HomeView extends GetView<HomeController> {
                 value: 'theme',
                 child: Text(Get.isDarkMode ? 'Light theme' : 'Dark theme'),
               ),
+              const PopupMenuItem(
+                  value: 'recording', child: Text('Recording quality')),
               const PopupMenuItem(value: 'logout', child: Text('Disconnect')),
             ],
           ),
@@ -81,6 +86,41 @@ class HomeView extends GetView<HomeController> {
             }),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Asks for the bitrate of the clips recorded in the live view.
+  void _chooseRecordingQuality(BuildContext context) {
+    final storage = GetStorage();
+    var current = RecordingQuality.fromName(
+        storage.read<String>(RecordingQuality.storageKey));
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          title: const Text('Recording quality'),
+          content: RadioGroup<RecordingQuality>(
+            groupValue: current,
+            onChanged: (q) {
+              if (q == null) return;
+              storage.write(RecordingQuality.storageKey, q.name);
+              setState(() => current = q);
+              Navigator.of(ctx).pop();
+            },
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final q in RecordingQuality.values)
+                  RadioListTile<RecordingQuality>(
+                    value: q,
+                    title: Text(q.label),
+                    subtitle: Text(q.approxSize),
+                  ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

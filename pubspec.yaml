@@ -41,6 +41,8 @@ dependencies:
   cupertino_icons: ^2.0.0
   flutter_foreground_task: ^11.0.3
   battery_plus: ^7.1.2
+  path_provider: ^2.1.6
+  gal: ^2.3.3
 
 dev_dependencies:
   flutter_test:
@@ -52,6 +54,13 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+
+# Local copy of flutter_webrtc 1.6.2+hotfix.4 with a configurable recording bitrate
+# (third_party/flutter_webrtc, see docs in the commit message). Remove this block
+# to go back to the published plugin.
+dependency_overrides:
+  flutter_webrtc:
+    path: third_party/flutter_webrtc
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

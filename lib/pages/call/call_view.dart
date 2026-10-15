@@ -5,8 +5,8 @@ import 'package:rtc/pages/call/call_controller.dart';
 import 'package:rtc/models/devices.dart';
 import 'package:rtc/theme/app_theme.dart';
 
-/// Temporarily hides the audio output selector (earpiece / loudspeaker /
-/// no sound) from the control bar. Audio stays muted (default "no sound").
+/// Shows the sound on / off button in the control bar. Audio is muted by
+/// default.
 const bool kShowAudioControl = true;
 
 /// Live view: full-screen video, translucent bars hidden after 4 s.
@@ -76,6 +76,7 @@ class CallView extends GetView<CallController> {
                           controller.error.value.isNotEmpty,
                       child: _topBar(oc))),
                   Obx(() => _badge()),
+                  Obx(() => _recIndicator()),
                   Obx(() => controller.error.value.isEmpty
                       ? const SizedBox.shrink()
                       : _errorBanner(context)),
@@ -182,6 +183,35 @@ class CallView extends GetView<CallController> {
     );
   }
 
+  /// Red "REC mm:ss" pill, shown as long as a recording runs, even when the
+  /// controls are hidden.
+  Widget _recIndicator() {
+    if (!controller.recording.value) return const SizedBox.shrink();
+    final s = controller.recordingSeconds.value;
+    final t = '${(s ~/ 60).toString().padLeft(2, '0')}:'
+        '${(s % 60).toString().padLeft(2, '0')}';
+    return Positioned(
+      left: 12,
+      top: controller.controlsVisible.value ? 76 : 16,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+            color: const Color(0xA60A0C0E),
+            borderRadius: BorderRadius.circular(4)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.fiber_manual_record,
+              size: 12, color: Color(0xFFFF5252)),
+          const SizedBox(width: 6),
+          Text('REC $t',
+              style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 11,
+                  color: Color(0xFFE6E9EB))),
+        ]),
+      ),
+    );
+  }
+
   Widget _badge() {
     final label = controller.linkLabel.value;
     if (label.isEmpty || !controller.connected.value) {
@@ -262,46 +292,23 @@ class CallView extends GetView<CallController> {
     );
   }
 
-  /// Earpiece / loudspeaker / no sound selector.
-  Widget _audioMenu() {
-    IconData icon(AudioOutput o) => switch (o) {
-          AudioOutput.earpiece => Icons.phone_in_talk,
-          AudioOutput.speaker => Icons.volume_up,
-          AudioOutput.off => Icons.volume_off,
-        };
-    String label(AudioOutput o) => switch (o) {
-          AudioOutput.earpiece => 'Earpiece',
-          AudioOutput.speaker => 'Loudspeaker',
-          AudioOutput.off => 'No sound',
-        };
+  /// Sound on / off. The sound plays on the media volume, like a video player.
+  Widget _audioToggle() {
     return Obx(() {
-      final current = controller.audioOutput.value;
-      return PopupMenuButton<AudioOutput>(
-        tooltip: 'Audio output',
-        onOpened: controller.showControls,
-        onSelected: (o) {
-          controller.showControls();
-          controller.setAudioOutput(o);
-        },
-        itemBuilder: (_) => [
-          for (final o in AudioOutput.values)
-            CheckedPopupMenuItem(
-              value: o,
-              checked: o == current,
-              child: Row(children: [
-                Icon(icon(o), size: 20),
-                const SizedBox(width: 12),
-                Text(label(o)),
-              ]),
-            ),
-        ],
-        child: Container(
-          width: 56,
-          height: 56,
-          decoration: const BoxDecoration(
-              color: Color(0x1FFFFFFF), shape: BoxShape.circle),
-          child: Icon(icon(current), color: Colors.white),
+      final on = controller.audioOutput.value == AudioOutput.speaker;
+      return IconButton(
+        tooltip: on ? 'Mute' : 'Turn the sound on',
+        iconSize: 24,
+        style: IconButton.styleFrom(
+          backgroundColor: const Color(0x1FFFFFFF),
+          fixedSize: const Size(56, 56),
         ),
+        color: Colors.white,
+        icon: Icon(on ? Icons.volume_up : Icons.volume_off),
+        onPressed: () {
+          controller.showControls();
+          controller.setAudioOutput(on ? AudioOutput.off : AudioOutput.speaker);
+        },
       );
     });
   }
@@ -331,7 +338,7 @@ class CallView extends GetView<CallController> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          if (kShowAudioControl) _audioMenu(),
+          if (kShowAudioControl) _audioToggle(),
           if (controller.canFlip)
             round(Icons.cameraswitch_outlined, 'Flip camera',
                 controller.remoteSwitchCamera),
@@ -342,6 +349,26 @@ class CallView extends GetView<CallController> {
                     : Icons.videocam_off,
                 'Toggle video',
                 controller.toggleVideo)),
+          Obx(() => IconButton(
+                tooltip: controller.recording.value
+                    ? 'Stop recording'
+                    : 'Record',
+                iconSize: 24,
+                style: IconButton.styleFrom(
+                  backgroundColor: const Color(0x1FFFFFFF),
+                  fixedSize: const Size(56, 56),
+                ),
+                color: controller.recording.value
+                    ? Colors.white
+                    : const Color(0xFFFF5252),
+                icon: Icon(controller.recording.value
+                    ? Icons.stop
+                    : Icons.fiber_manual_record),
+                onPressed: () {
+                  controller.showControls();
+                  controller.toggleRecording();
+                },
+              )),
           IconButton(
             tooltip: 'Hang up',
             style: IconButton.styleFrom(

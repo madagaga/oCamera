@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -6,16 +7,22 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart' as webrtc;
+import 'package:gal/gal.dart';
 import 'package:get/get.dart';
+import 'package:get_storage/get_storage.dart';
+import 'package:path_provider/path_provider.dart';
 import '../../models/devices.dart';
 import '../../models/envelope.dart';
 import '../../models/ice_config.dart';
+import '../../models/recording_quality.dart';
 import '../../routes/app_pages.dart';
 import '../../services/peer_session.dart';
 import '../../services/signaling_channel.dart';
 
 /// Call-side viewer: one session (`sid`) with a camera, protocol v1.
-enum AudioOutput { earpiece, speaker, off }
+/// Camera audio: played on the media stream (one volume slider, like a video
+/// player), or muted.
+enum AudioOutput { speaker, off }
 
 class CallController extends GetxController {
   final SignalingService _signalingService = Get.find();
@@ -38,6 +45,13 @@ class CallController extends GetxController {
   final RxBool relayed = false.obs;
 
   final GlobalKey videoRenderKey = GlobalKey();
+
+  /// Local recording of the received video (MP4 in the app storage).
+  final RxBool recording = false.obs;
+  final RxInt recordingSeconds = 0.obs;
+  webrtc.MediaRecorderNative? _recorder;
+  Timer? _recordTimer;
+  String? _recordPath;
 
   /// Video zoom / pan (pinch; double tap to return to 1×).
   final TransformationController zoom = TransformationController();
@@ -110,19 +124,19 @@ class CallController extends GetxController {
     super.onClose();
   }
 
-  /// Call-style audio routing: the earpiece by default, the loudspeaker on
-  /// request ([AudioOutput.speaker]). Routing is driven by setSpeakerphoneOn, which
-  /// needs the communication audio mode.
+  /// Plays the camera audio on the media stream, like a video player: the
+  /// loudspeaker (or a connected headset) and the media volume slider. The
+  /// call mode would route to the earpiece but adds a second "call volume".
   Future<void> _initializeAudio() async {
     await webrtc.Helper.setAndroidAudioConfiguration(
       webrtc.AndroidAudioConfiguration(
-        androidAudioMode: webrtc.AndroidAudioMode.inCommunication,
-        androidAudioStreamType: webrtc.AndroidAudioStreamType.voiceCall,
+        androidAudioMode: webrtc.AndroidAudioMode.normal,
+        androidAudioStreamType: webrtc.AndroidAudioStreamType.music,
         androidAudioAttributesUsageType:
-            webrtc.AndroidAudioAttributesUsageType.voiceCommunication,
+            webrtc.AndroidAudioAttributesUsageType.media,
       ),
     );
-    await webrtc.Helper.setSpeakerphoneOn(audioOutput.value == AudioOutput.speaker);
+    await webrtc.Helper.setSpeakerphoneOnButPreferBluetooth();
   }
 
   /// Selects the audio output; [AudioOutput.off] mutes the camera audio.
@@ -130,9 +144,6 @@ class CallController extends GetxController {
     audioOutput.value = output;
     for (final track in _remoteStream?.getAudioTracks() ?? []) {
       track.enabled = output != AudioOutput.off;
-    }
-    if (output != AudioOutput.off) {
-      await webrtc.Helper.setSpeakerphoneOn(output == AudioOutput.speaker);
     }
   }
 
@@ -322,6 +333,9 @@ class CallController extends GetxController {
 
     debugPrint('Hanging up call with ${target.value.name}');
 
+    // finish the file before the stream goes away
+    await stopRecording(silent: true);
+
     final remote = _remoteStream;
     _remoteStream = null;
     if (remote != null) {
@@ -338,6 +352,90 @@ class CallController extends GetxController {
     _peer = null;
     await peer?.close();
     connected.value = false;
+  }
+
+  // ---- recording ---------------------------------------------------------
+
+  Future<void> toggleRecording() =>
+      recording.value ? stopRecording() : startRecording();
+
+  /// Records the received video to an MP4 file in the app storage. The audio
+  /// is included only when the sound is on at the moment recording starts.
+  ///
+  /// The plugin re-encodes the decoded frames in H.264 (it has no access to
+  /// the received packets), so this costs some CPU and battery.
+  Future<void> startRecording() async {
+    if (recording.value || _closed) return;
+    final tracks = _remoteStream?.getVideoTracks() ?? [];
+    if (tracks.isEmpty) {
+      Get.snackbar('Recording', 'The video is not ready yet');
+      return;
+    }
+    try {
+      final base = await getExternalStorageDirectory() ??
+          await getApplicationDocumentsDirectory();
+      final dir = Directory('${base.path}/recordings');
+      await dir.create(recursive: true);
+      final name = target.value.name.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+      final stamp = DateTime.now()
+          .toIso8601String()
+          .substring(0, 19)
+          .replaceAll(RegExp(r'[-:]'), '')
+          .replaceAll('T', '_');
+      final path = '${dir.path}/${name}_$stamp.mp4';
+
+      final quality = RecordingQuality.fromName(
+          GetStorage().read<String>(RecordingQuality.storageKey));
+      // MediaRecorderNative comes from the local plugin copy, which accepts a
+      // bitrate; the stock recorder always starts at 6 Mb/s.
+      final recorder = webrtc.MediaRecorderNative(
+          bitrate: quality.bitrate, frameRate: 15);
+      await recorder.start(
+        path,
+        videoTrack: tracks.first,
+        audioChannel: audioOutput.value == AudioOutput.off
+            ? null
+            : webrtc.RecorderAudioChannel.OUTPUT,
+      );
+      _recorder = recorder;
+      _recordPath = path;
+      recordingSeconds.value = 0;
+      recording.value = true;
+      _recordTimer = Timer.periodic(
+          const Duration(seconds: 1), (_) => recordingSeconds.value++);
+      debugPrint('[Record] started $path');
+    } catch (e) {
+      debugPrint('[Record] start failed: $e');
+      Get.snackbar('Recording', "Couldn't start the recording");
+    }
+  }
+
+  Future<void> stopRecording({bool silent = false}) async {
+    final recorder = _recorder;
+    if (recorder == null) return;
+    final path = _recordPath;
+    _recorder = null;
+    _recordPath = null;
+    _recordTimer?.cancel();
+    recording.value = false;
+    try {
+      await recorder.stop();
+      debugPrint('[Record] file written $path');
+      if (path == null) return;
+      // Android hides Android/data from file managers: copy the clip to the
+      // gallery (Movies/oCamera), then drop the private copy.
+      await Gal.putVideo(path, album: 'oCamera');
+      await File(path).delete();
+      debugPrint('[Record] saved to the gallery');
+      if (!silent) {
+        Get.snackbar('Recording saved', 'In your gallery, album "oCamera"');
+      }
+    } catch (e) {
+      debugPrint('[Record] stop failed: $e');
+      if (!silent) {
+        Get.snackbar('Recording', "The clip couldn't be saved to the gallery");
+      }
+    }
   }
 
   // ---- display -----------------------------------------------------------
