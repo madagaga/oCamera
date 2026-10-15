@@ -20,17 +20,17 @@ import '../../services/peer_session.dart';
 import '../../services/signaling_channel.dart';
 
 /// Call-side viewer: one session (`sid`) with a camera, protocol v1.
-/// Camera audio: played on the media stream (one volume slider, like a video
-/// player), or muted.
-enum AudioOutput { speaker, off }
-
 class CallController extends GetxController {
   final SignalingService _signalingService = Get.find();
 
   Rx<Device> target = Rx<Device>(Device('--'));
   RxBool enableVideo = true.obs;
-  /// Where the camera audio goes: earpiece, loudspeaker or nowhere (default).
-  final Rx<AudioOutput> audioOutput = AudioOutput.off.obs;
+  /// Where the camera audio goes: an output id of the plugin (`speaker`,
+  /// `earpiece`, `bluetooth`, `wired-headset`), or null for no sound (default).
+  final Rxn<String> audioDevice = Rxn<String>();
+
+  /// Outputs available right now (a headset can come and go).
+  final RxList<String> audioOutputs = <String>[].obs;
   RxBool connected = false.obs;
 
   /// Error message shown in the view; non-empty = session ended with an error.
@@ -59,6 +59,7 @@ class CallController extends GetxController {
   void resetZoom() => zoom.value = Matrix4.identity();
 
   webrtc.MediaStream? _remoteStream;
+  webrtc.MediaStreamTrack? _remoteAudio;
   PeerSession? _peer;
   final webrtc.RTCVideoRenderer remoteRTCVideoRenderer =
       webrtc.RTCVideoRenderer();
@@ -117,6 +118,7 @@ class CallController extends GetxController {
     if (_signalingService.onInbox == _onInbox) {
       _signalingService.onInbox = null;
     }
+    webrtc.navigator.mediaDevices.ondevicechange = null;
     _sendBye('user');
     await _teardown();
     await remoteRTCVideoRenderer.dispose();
@@ -124,28 +126,84 @@ class CallController extends GetxController {
     super.onClose();
   }
 
-  /// Plays the camera audio on the media stream, like a video player: the
-  /// loudspeaker (or a connected headset) and the media volume slider. The
-  /// call mode would route to the earpiece but adds a second "call volume".
+  /// Call-mode audio, which lets the app pick the output: the earpiece, the
+  /// loudspeaker, or a connected Bluetooth / wired headset. (The media mode
+  /// gave one volume slider but the sound went to the earpiece and the
+  /// output could not be chosen.)
   Future<void> _initializeAudio() async {
     await webrtc.Helper.setAndroidAudioConfiguration(
       webrtc.AndroidAudioConfiguration(
-        androidAudioMode: webrtc.AndroidAudioMode.normal,
-        androidAudioStreamType: webrtc.AndroidAudioStreamType.music,
+        androidAudioMode: webrtc.AndroidAudioMode.inCommunication,
+        androidAudioStreamType: webrtc.AndroidAudioStreamType.voiceCall,
         androidAudioAttributesUsageType:
-            webrtc.AndroidAudioAttributesUsageType.media,
+            webrtc.AndroidAudioAttributesUsageType.voiceCommunication,
       ),
     );
-    await webrtc.Helper.setSpeakerphoneOnButPreferBluetooth();
+    webrtc.navigator.mediaDevices.ondevicechange = (_) => refreshAudioOutputs();
+    await refreshAudioOutputs();
   }
 
-  /// Selects the audio output; [AudioOutput.off] mutes the camera audio.
-  Future<void> setAudioOutput(AudioOutput output) async {
-    audioOutput.value = output;
-    for (final track in _remoteStream?.getAudioTracks() ?? []) {
-      track.enabled = output != AudioOutput.off;
+  static const _outputPriority = [
+    'bluetooth',
+    'wired-headset',
+    'speaker',
+    'earpiece',
+  ];
+
+  Future<void> refreshAudioOutputs() async {
+    try {
+      final devices = await webrtc.Helper.audiooutputs;
+      final ids = devices.map((d) => d.deviceId).toSet();
+      audioOutputs.assignAll(_outputPriority.where(ids.contains));
+      // the selected output disappeared (headset unplugged): fall back
+      final current = audioDevice.value;
+      if (current != null && !audioOutputs.contains(current)) {
+        await setAudioDevice(_bestOutput());
+      }
+    } catch (e) {
+      debugPrint('[Audio] cannot list outputs: $e');
     }
   }
+
+  /// Bluetooth, then wired headset, then loudspeaker, then earpiece.
+  String? _bestOutput() =>
+      audioOutputs.isNotEmpty ? audioOutputs.first : 'speaker';
+
+  /// Selects the audio output; null mutes the camera audio.
+  Future<void> setAudioDevice(String? id) async {
+    audioDevice.value = id;
+    await _applyMute();
+    if (id != null) {
+      try {
+        await webrtc.Helper.selectAudioOutput(id);
+      } catch (e) {
+        debugPrint('[Audio] cannot select $id: $e');
+      }
+    }
+  }
+
+  /// Mutes or unmutes the remote audio. The track is disabled and its volume
+  /// set to 0: disabling alone did not silence it (the sound stayed audible in
+  /// the earpiece), and the track handed over by onTrack is the reliable one.
+  Future<void> _applyMute() async {
+    final muted = audioDevice.value == null;
+    final tracks = <webrtc.MediaStreamTrack>[
+      if (_remoteAudio != null) _remoteAudio!,
+      ...?_remoteStream?.getAudioTracks(),
+    ];
+    for (final track in tracks) {
+      track.enabled = !muted;
+      try {
+        await webrtc.Helper.setVolume(muted ? 0.0 : 1.0, track);
+      } catch (e) {
+        debugPrint('[Audio] setVolume failed: $e');
+      }
+    }
+    debugPrint('[Audio] ${muted ? 'muted' : 'unmuted'} (${tracks.length} track(s))');
+  }
+
+  /// Turns the sound on with the best available output.
+  Future<void> soundOn() => setAudioDevice(_bestOutput());
 
   Future<void> _startCall() async {
     final args = Get.arguments;
@@ -163,11 +221,15 @@ class CallController extends GetxController {
         Envelope('ice', {'candidates': cands, 'end': end}, sid: _sid),
       ),
       onConnectionState: _onConnectionState,
+      onRemoteAudio: (track) {
+        _remoteAudio = track;
+        _applyMute();
+      },
       onRemoteVideo: (stream) {
         _remoteStream = stream;
         remoteRTCVideoRenderer.srcObject = stream;
         // re-apply the selected output (e.g. "No sound" chosen before the stream arrived)
-        setAudioOutput(audioOutput.value);
+        setAudioDevice(audioDevice.value);
       },
     );
     _peer = peer;
@@ -338,6 +400,7 @@ class CallController extends GetxController {
 
     final remote = _remoteStream;
     _remoteStream = null;
+    _remoteAudio = null;
     if (remote != null) {
       // the preview must be captured before detaching the stream
       await captureSnapshot();
@@ -393,7 +456,7 @@ class CallController extends GetxController {
       await recorder.start(
         path,
         videoTrack: tracks.first,
-        audioChannel: audioOutput.value == AudioOutput.off
+        audioChannel: audioDevice.value == null
             ? null
             : webrtc.RecorderAudioChannel.OUTPUT,
       );

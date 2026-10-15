@@ -1,91 +1,126 @@
 # oCamera
 
-Open source camera P2P WebRTC client for the oCamera app. This project aims to provide a peer-to-peer camera client using WebRTC technology, allowing for seamless, real-time communication.
+**Watch your cameras from anywhere, directly. No cloud, no account, no port forwarding.**
 
-## Features
+oCamera is an open source Android app that opens your IP cameras (and your old phones turned into cameras)
+over an encrypted, peer-to-peer WebRTC link. The video goes from the camera to your phone, and nowhere else:
+no vendor server, no "P2P service" run by someone you have never heard of.
 
-- Peer-to-peer camera streaming using WebRTC.
-- Integration with the oCamera app.
-- Flutter-based UI for cross-platform compatibility.
-- Connect two or more devices running the oCamera application to enable real-time video communication.
-- One-way video streaming (from RTSP camera to oCamera).
+```
+ IP camera (RTSP) ─▶ oCamera agent (Go) ◀── MQTT broker (signaling only) ──▶ oCamera app
+ Old phone (camera mode) ───────────────────────┘                                  │
+                          ╚══════════ WebRTC, encrypted, peer-to-peer ═════════════╝
+```
 
-## How It Works
+## Why oCamera
 
-oCamera leverages WebRTC to establish a direct connection between two or more devices, allowing for peer-to-peer (P2P) video streaming without the need for an intermediary server. Here's a detailed look at how it works:
+- **Your video stays yours.** The stream is end-to-end encrypted (WebRTC DTLS-SRTP) between the camera
+  side and your phone. Nothing is stored, relayed or analysed by a third party.
+- **Nothing to expose.** The camera side only makes outgoing connections. No port forwarding, no dynamic
+  DNS, no VPN to maintain, nothing listening on your network.
+- **You choose the only server involved.** A small MQTT broker carries a few messages to set up each
+  connection (no video). Run your own [Mosquitto](https://mosquitto.org) or use a free hosted one.
+- **Cameras for every drawer.** Watch RTSP cameras through the lightweight
+  [oCameraAgent](https://github.com/madagaga/oCameraAgent) (a single Go binary, about 10 MB, around 13 to
+  16 MB of RAM), or **turn an old Android phone into a camera** with the same app.
+- **Built for old hardware.** In camera mode the phone only encodes with its hardware encoder, keeps the
+  screen off, and sips battery: about 1.4 % per hour in standby on a recycled phone (measured, release
+  build, screen off).
+- **Open protocol.** The signaling is documented in `MQTT_PROTOCOL.md`; write your own camera or viewer.
 
-1. **MQTT Signaling**: The signaling process is implemented using MQTT, a lightweight messaging protocol. The `signaling_channel.dart` file manages the connection to an MQTT broker, which acts as a signaling server. The MQTT client handles topics for communication, including:
-   - **Offer and Answer Exchange**: The signaling channel listens for SDP (Session Description Protocol) packets, including offers and answers, to establish a WebRTC connection.
-   - **ICE Candidates**: ICE (Interactive Connectivity Establishment) candidates are exchanged via MQTT messages to help peers establish a reliable connection.
-   - **Device Discovery**: The signaling service also manages device discovery and maintains a list of connected devices, ensuring efficient communication.
+## What the app does
 
-2. **WebRTC Protocol**: Once signaling is complete, WebRTC is used to create a secure, encrypted P2P channel between devices. This channel is used to transmit video data directly between peers, ensuring low latency and high-quality video streaming.
+**As a viewer**
+- Lists your cameras with their live status: online, offline, in use, and the battery level of phone
+  cameras (plugged in or not).
+- Opens the live video in one tap, with pinch zoom, and shows the link type (direct or relayed), codec and
+  bitrate.
+- **SD / HD** switch per camera, when the camera offers several streams.
+- **Records clips** to your gallery (album "oCamera") with a choice of three qualities (about 55, 110 or
+  225 MB per hour).
+- **Sound on demand**: starts muted, and plays on the loudspeaker, the earpiece or a Bluetooth / wired
+  headset.
+- Dark and light themes, and a connection test on the sign-in screen.
 
-3. **NAT Traversal**: The application uses technologies like STUN (Session Traversal Utilities for NAT) to overcome network obstacles, such as firewalls and NATs (Network Address Translators), which may otherwise block P2P connections. The only external server involved is the STUN server (e.g., Google's STUN server).
+**As a camera** (any Android phone)
+- Stays reachable with the screen off, through an Android foreground service, and reconnects by itself
+  after a network loss.
+- Offers SD and HD streams with a bitrate cap, and only the codecs your phone can encode in hardware.
+- Remote commands: flip the camera, torch.
 
-4. **One-Way Video Streaming**: The initial design of oCamera focuses on transmitting RTSP video streams to oCamera, allowing users to view video feeds from an RTSP camera on their mobile devices.
+## oCamera vs go2rtc
 
-5. **No Data Retention**: oCamera does not use any proxy servers for signaling or data storage. All signaling occurs via MQTT with no data retention, ensuring a secure and privacy-focused solution.
+[go2rtc](https://github.com/AlexxIT/go2rtc) is an excellent, much broader camera streaming server: many
+inputs and outputs, a web UI, and tight integration with Home Assistant and Frigate. oCamera is
+deliberately narrower. Pick the one that fits.
 
-6. **Alternative to Chinese P2P Solutions**: oCamera provides an alternative to standard P2P solutions provided by many Chinese cameras, ensuring that no data is sent to unknown third-party servers. Except for the STUN server, no data passes through external servers, giving users full control over their data.
+| | **oCamera** | **go2rtc** |
+|---|---|---|
+| Goal | Reach your cameras from your phone, privately, with nothing exposed | Universal stream hub: many sources, many outputs |
+| Remote access | Outgoing connections only, MQTT broker for signaling, direct WebRTC | Direct WebRTC may work through hole punching; stable external access needs port 8555 opened (TCP and UDP) on your router |
+| Client | Dedicated Android app (viewer and phone-camera mode) | Web UI and HTTP API, Home Assistant, any compatible player |
+| Camera side | oCameraAgent (about 10 MB, 13 to 16 MB of RAM), or an old phone | One binary with a much larger feature set |
+| Sources and outputs | RTSP in (or the phone camera), WebRTC out | Dozens of protocols in and out, optional FFmpeg transcoding |
+| Viewers | One at a time per camera | Many consumers |
+| Recording | Clips recorded on the viewer, low bitrate | Not described in its README; usually paired with Home Assistant or Frigate |
+| Extra infrastructure | An MQTT broker (free or self-hosted) | None for local use |
 
-7. **Flutter-based UI**: The client interface is built using Flutter, which ensures the application can run on both Android and iOS devices with a consistent user experience. The UI provides options to configure the connection settings, such as specifying the MQTT broker and managing video streams.
+**Choose oCamera** for a private, no-exposure way to watch cameras from your phone, on modest hardware, and
+to recycle old phones as cameras. **Choose go2rtc** to convert between protocols, share one camera with many
+viewers, transcode, or plug into a home automation hub. They also work together: the agent only needs an RTSP
+URL, which go2rtc can provide.
 
-## Getting Started
+## Get started
 
-This project is built using Flutter. To get started:
+1. **A broker.** Create an account for each camera and each phone on your MQTT broker (TLS, login and
+   password). Per-account access rules are described in `MQTT_PROTOCOL.md` (project root).
+2. **A camera.**
+   - *IP camera:* run the [oCameraAgent](https://github.com/madagaga/oCameraAgent) on a small always-on
+     machine (router, Raspberry Pi, NAS, mini PC). Download a binary from its
+     [releases](https://github.com/madagaga/oCameraAgent/releases), copy `config.yaml.template` to
+     `config.yaml`, fill in your broker and the camera's RTSP URL, then run
+     `./oCameraAgent -config config.yaml`.
+   - *Old phone:* install the app, pick **Camera** on the sign-in screen and use the camera's own account.
+3. **The viewer.** Install the app on your phone, pick **Viewer**, enter your broker address and your
+   account: your cameras appear.
 
-1. Install dependencies:
-   ```
-   flutter pub get
-   ```
+## Honest limits
 
-2. Run the app:
-   ```
-   flutter run
-   ```
+- It needs an MQTT broker. If you want something with no infrastructure at all, this is not it.
+- One viewer per camera at a time; a second viewer is told the camera is busy.
+- STUN (to find a path through your router) uses free public servers by default and carries no video. On
+  strict networks (some mobile carriers, corporate NATs), add a TURN server: see `STUN_TURN.md` in the project root.
+- Clips are recorded on the viewer from the decoded video, so they are re-encoded at the chosen quality.
+- No motion detection and no continuous recording on a server: oCamera is for live viewing.
+- Android only. Phone-camera mode relies on Android's foreground services and hardware encoders.
 
-## Quick Start with oCameraAgent
+## Build the app
 
-To quickly get started with the full oCamera solution, you will also need to set up the [oCameraAgent](https://github.com/madagaga/oCameraAgent) project. The agent is used to connect to an RTSP camera and transmit the video stream to oCamera, allowing it to be viewed by other devices connected via oCamera.
+You need the Flutter SDK and an Android device.
 
-### Steps:
-1. Download the precompiled binaries (x86 and ARM) from the [oCameraAgent releases](https://github.com/madagaga/oCameraAgent/releases).
-2. Follow the setup instructions in the oCameraAgent repository to run the agent.
-3. Ensure that you have an MQTT broker set up. You can either self-host an MQTT broker or create an account with an online MQTT broker service, such as [HiveMQ](https://www.hivemq.com).
-4. Configure both the oCamera app and oCameraAgent to use the same MQTT broker for signaling.
+```bash
+flutter pub get
+flutter run            # debug
+flutter run --release  # release (what to use to measure battery)
+```
 
-## Requirements
+The app uses a local copy of `flutter_webrtc` (in `third_party/flutter_webrtc`) that adds a configurable
+recording bitrate; see `third_party/flutter_webrtc/OCAMERA_PATCH.md`.
 
-- Flutter SDK
-- Dart
-- Android/iOS device or emulator
+## Documentation
 
-## Installation
-
-Ensure you have the Flutter SDK installed and configured. Follow [Flutter's installation guide](https://flutter.dev/docs/get-started/install) for your operating system.
-
-## Usage
-
-- Launch the app to connect to the MQTT broker and start peer-to-peer camera streaming.
-- Configure the settings in the app to connect to the appropriate MQTT broker.
-- Connect two or more devices running the oCamera app to enable video communication between them.
+- `MQTT_PROTOCOL.md` (project root): the signaling protocol (version 1) and the Mosquitto setup
+- `STUN_TURN.md` (project root): STUN and TURN servers
+- [oCameraAgent](https://github.com/madagaga/oCameraAgent): the camera-side agent for RTSP cameras
 
 ## Contributing
 
-Contributions are welcome! Please open an issue or submit a pull request with your improvements.
-
-1. Fork the repository.
-2. Create a new branch (`git checkout -b feature-branch`).
-3. Commit your changes (`git commit -m 'Add new feature'`).
-4. Push to the branch (`git push origin feature-branch`).
-5. Open a pull request.
+Contributions are welcome. Open an issue or a pull request.
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+MIT. See the [LICENSE](LICENSE) file.
 
 ## Contact
 
-For questions or suggestions, please reach out to the maintainer at [GitHub Issues](https://github.com/madagaga/oCamera/issues).
-
+Questions and suggestions: [GitHub Issues](https://github.com/madagaga/oCamera/issues).
