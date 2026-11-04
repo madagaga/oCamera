@@ -19,7 +19,8 @@ class CameraProfile {
       {bool online = true,
       bool busy = false,
       String? viewer,
-      BatteryInfo? battery}) {
+      BatteryInfo? battery,
+      String? facing}) {
     return {
       'v': 1,
       'ts': DateTime.now().millisecondsSinceEpoch ~/ 1000,
@@ -31,6 +32,7 @@ class CameraProfile {
       'caps': caps.toJson(),
       'agent': {'name': agentName, 'version': agentVersion},
       if (battery != null) 'battery': battery.toJson(),
+      if (facing != null) 'facing': facing,
     };
   }
 }

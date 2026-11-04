@@ -60,7 +60,12 @@ class PeerConnectionObserver implements PeerConnection.Observer, EventChannel.St
   final Map<String, MediaStream> remoteStreams = new HashMap<>();
   private final RemoteTrackRegistry<MediaStreamTrack> remoteTracks =
       new RemoteTrackRegistry<>();
-  final Map<String, RtpTransceiver> transceivers = new HashMap<>();
+  // Unified Plan: the track registered for each receiver id by onAddTrack, so
+  // onRemoveTrack (which gets another wrapper of the same receiver) removes
+  // that exact object.
+  private final Map<String, MediaStreamTrack> remoteTracksByReceiver =
+      new ConcurrentHashMap<>();
+  final Map<String, RtpTransceiver> transceivers = new ConcurrentHashMap<>();
   private final StateProvider stateProvider;
   private final EventChannel eventChannel;
   private EventChannel.EventSink eventSink;
@@ -100,13 +105,21 @@ class PeerConnectionObserver implements PeerConnection.Observer, EventChannel.St
   }
 
   void restartIce() {
+    if (peerConnection == null) {
+      Log.w(TAG, "restartIce(): peerConnection is null");
+      return;
+    }
     peerConnection.restartIce();
   }
 
   void close() {
-    peerConnection.close();
+    if (peerConnection != null) {
+      peerConnection.close();
+    }
     remoteStreams.clear();
     remoteTracks.clear();
+    remoteTracksByReceiver.clear();
+    trackTransceivers.clear();
     // The data channels stay registered until dispose() so that their event
     // channel handlers can be released there. Closing the peer connection
     // already closes them.
@@ -119,7 +132,9 @@ class PeerConnectionObserver implements PeerConnection.Observer, EventChannel.St
     for (String dataChannelId : new ArrayList<>(dataChannels.keySet())) {
       disposeDataChannel(dataChannelId);
     }
-    peerConnection.dispose();
+    if (peerConnection != null) {
+      peerConnection.dispose();
+    }
     eventChannel.setStreamHandler(null);
   }
 
@@ -217,31 +232,54 @@ class PeerConnectionObserver implements PeerConnection.Observer, EventChannel.St
   RtpTransceiver getRtpTransceiverById(String id) {
     RtpTransceiver transceiver = transceivers.get(id);
     if (null == transceiver) {
-      List<RtpTransceiver> transceivers = peerConnection.getTransceivers();
-      for (RtpTransceiver t : transceivers) {
-        if (id.equals(t.getMid())) {
-          transceiver = t;
+      synchronized (transceiversLock) {
+        try {
+          List<RtpTransceiver> transceivers = peerConnection.getTransceivers();
+          for (RtpTransceiver t : transceivers) {
+            if (id.equals(t.getMid())) {
+              transceiver = t;
+            }
+          }
+        } catch (IllegalStateException e) {
+          Log.w(TAG, "getRtpTransceiverById: transceiver disposed concurrently", e);
         }
       }
     }
     return transceiver;
   }
 
+  // PeerConnection.getTransceivers() disposes the previously returned list on every call and
+  // is not thread-safe: an unsynchronized overlap throws IllegalStateException on a native
+  // thread, which aborts the process (SIGABRT). Every use from the main thread must hold this
+  // lock. The signaling thread (onAddTrack) must NOT take it: the main thread holds it while
+  // blocked on the signaling thread, which would deadlock.
+  private final Object transceiversLock = new Object();
+
   RtpSender getRtpSenderById(String id) {
-    List<RtpSender> senders = peerConnection.getSenders();
-    for (RtpSender sender : senders) {
-      if (id.equals(sender.id())) {
-        return sender;
+    synchronized (transceiversLock) {
+      try {
+        for (RtpSender sender : peerConnection.getSenders()) {
+          if (id.equals(sender.id())) {
+            return sender;
+          }
+        }
+      } catch (IllegalStateException e) {
+        Log.w(TAG, "getRtpSenderById: sender disposed concurrently", e);
       }
     }
     return null;
   }
 
   RtpReceiver getRtpReceiverById(String id) {
-    List<RtpReceiver> receivers = peerConnection.getReceivers();
-    for (RtpReceiver receiver : receivers) {
-      if (id.equals(receiver.id())) {
-        return receiver;
+    synchronized (transceiversLock) {
+      try {
+        for (RtpReceiver receiver : peerConnection.getReceivers()) {
+          if (id.equals(receiver.id())) {
+            return receiver;
+          }
+        }
+      } catch (IllegalStateException e) {
+        Log.w(TAG, "getRtpReceiverById: receiver disposed concurrently", e);
       }
     }
     return null;
@@ -322,16 +360,22 @@ class PeerConnectionObserver implements PeerConnection.Observer, EventChannel.St
 
     RtpSender sender = null;
     RtpReceiver receiver = null;
-    for (RtpSender s : peerConnection.getSenders()) {
-      if (s.track() != null && trackId.equals(s.track().id())) {
-        sender = s;
-        break;
-      }
-    }
-    for (RtpReceiver r : peerConnection.getReceivers()) {
-      if (r.track() != null && trackId.equals(r.track().id())) {
-        receiver = r;
-        break;
+    synchronized (transceiversLock) {
+      try {
+        for (RtpSender s : peerConnection.getSenders()) {
+          if (s.track() != null && trackId.equals(s.track().id())) {
+            sender = s;
+            break;
+          }
+        }
+        for (RtpReceiver r : peerConnection.getReceivers()) {
+          if (r.track() != null && trackId.equals(r.track().id())) {
+            receiver = r;
+            break;
+          }
+        }
+      } catch (IllegalStateException e) {
+        Log.w(TAG, "getStatsForTrack: sender/receiver disposed concurrently", e);
       }
     }
     if (sender != null) {
@@ -506,8 +550,18 @@ class PeerConnectionObserver implements PeerConnection.Observer, EventChannel.St
     sendEvent(params);
   }
 
+  // Transceivers announced by onTrack, keyed by receiver id. onAddTrack (signaling thread)
+  // reads this map instead of calling peerConnection.getTransceivers() under transceiversLock:
+  // the main thread holds that lock while its own getTransceivers() blocks on the signaling
+  // thread, so taking the lock on the signaling thread was a lock-order deadlock.
+  private final Map<String, RtpTransceiver> trackTransceivers = new ConcurrentHashMap<>();
+
   @Override
   public void onTrack(RtpTransceiver transceiver) {
+    RtpReceiver receiver = transceiver.getReceiver();
+    if (receiver != null) {
+      trackTransceivers.put(receiver.id(), transceiver);
+    }
   }
 
   @Override
@@ -553,16 +607,34 @@ class PeerConnectionObserver implements PeerConnection.Observer, EventChannel.St
     params.putMap("receiver", rtpReceiverToMap(receiver));
 
     if (this.configuration.sdpSemantics == PeerConnection.SdpSemantics.UNIFIED_PLAN) {
-      List<RtpTransceiver> transceivers = peerConnection.getTransceivers();
-      for (RtpTransceiver transceiver : transceivers) {
-        if (transceiver.getReceiver() != null && receiver.id().equals(transceiver.getReceiver().id())) {
-          String transceiverId = transceiver.getMid();
-          if (null == transceiverId) {
-            transceiverId = stateProvider.getNextStreamUUID();
-            this.transceivers.put(transceiverId,transceiver);
-          }
-          params.putMap("transceiver", transceiverToMap(transceiverId, transceiver));
+      // Register the track object of this callback's receiver, as
+      // onAddStream does for Plan B. Without it a renderer resolves the
+      // track through peerConnection.getTransceivers(), whose next call (from
+      // here, or any getTransceivers/getReceivers from Dart) disposes the
+      // RtpTransceivers of the previous one, their receivers' tracks and,
+      // with them, every sink attached to those tracks: the renderer stops
+      // receiving frames while the track keeps decoding. The receiver of this
+      // callback is not part of those lists, so its track object stays valid.
+      MediaStreamTrack receiverTrack = receiver.track();
+      if (receiverTrack != null) {
+        String streamId = mediaStreams.length > 0 ? mediaStreams[0].getId() : "";
+        remoteTracks.put(receiverTrack.id(), receiverTrack);
+        remoteTracksByReceiver.put(receiver.id(), receiverTrack);
+        stateProvider.onRemoteTrackAdded(id, streamId, receiverTrack);
+      }
+
+      // No native call and no lock here: see trackTransceivers. If onTrack has not fired yet
+      // the event goes out without a transceiver (the Dart side treats it as optional).
+      RtpTransceiver transceiver = trackTransceivers.get(receiver.id());
+      if (transceiver != null) {
+        String transceiverId = transceiver.getMid();
+        if (null == transceiverId) {
+          transceiverId = stateProvider.getNextStreamUUID();
+          this.transceivers.put(transceiverId, transceiver);
         }
+        params.putMap("transceiver", transceiverToMap(transceiverId, transceiver));
+      } else {
+        Log.w(TAG, "onAddTrack: no transceiver announced for receiver " + receiver.id());
       }
     }
     sendEvent(params);
@@ -574,6 +646,11 @@ class PeerConnectionObserver implements PeerConnection.Observer, EventChannel.St
 
     MediaStreamTrack track = rtpReceiver.track();
     String trackId = track.id();
+    trackTransceivers.remove(rtpReceiver.id());
+    MediaStreamTrack registered = remoteTracksByReceiver.remove(rtpReceiver.id());
+    if (registered != null) {
+      remoteTracks.remove(trackId, registered);
+    }
     ConstraintsMap trackInfo = new ConstraintsMap();
     trackInfo.putString("id", trackId);
     trackInfo.putString("label", track.kind());
@@ -1229,15 +1306,21 @@ class PeerConnectionObserver implements PeerConnection.Observer, EventChannel.St
   }
 
   public void getTransceivers(Result result) {
-    List<RtpTransceiver> transceivers = peerConnection.getTransceivers();
     ConstraintsArray transceiversParams = new ConstraintsArray();
-    for (RtpTransceiver transceiver : transceivers) {
-      String transceiverId = transceiver.getMid();
-      if (null == transceiverId) {
-        transceiverId = stateProvider.getNextStreamUUID();
-        this.transceivers.put(transceiverId,transceiver);
+    synchronized (transceiversLock) {
+      try {
+        List<RtpTransceiver> transceivers = peerConnection.getTransceivers();
+        for (RtpTransceiver transceiver : transceivers) {
+          String transceiverId = transceiver.getMid();
+          if (null == transceiverId) {
+            transceiverId = stateProvider.getNextStreamUUID();
+            this.transceivers.put(transceiverId,transceiver);
+          }
+          transceiversParams.pushMap(new ConstraintsMap(transceiverToMap(transceiverId, transceiver)));
+        }
+      } catch (IllegalStateException e) {
+        Log.w(TAG, "getTransceivers: transceiver disposed concurrently", e);
       }
-      transceiversParams.pushMap(new ConstraintsMap(transceiverToMap(transceiverId, transceiver)));
     }
     ConstraintsMap params = new ConstraintsMap();
     params.putArray("transceivers", transceiversParams.toArrayList());
@@ -1249,15 +1332,21 @@ class PeerConnectionObserver implements PeerConnection.Observer, EventChannel.St
       return null;
     }
     MediaStreamTrack track = null;
-    List<RtpTransceiver> transceivers = peerConnection.getTransceivers();
-    for (RtpTransceiver transceiver : transceivers) {
-      RtpReceiver receiver = transceiver.getReceiver();
-      if (receiver != null) {
-        MediaStreamTrack receiverTrack = receiver.track();
-        if (receiverTrack != null && receiverTrack.id().equals(trackId)) {
-          track = receiverTrack;
-          break;
+    synchronized (transceiversLock) {
+      try {
+        List<RtpTransceiver> transceivers = peerConnection.getTransceivers();
+        for (RtpTransceiver transceiver : transceivers) {
+          RtpReceiver receiver = transceiver.getReceiver();
+          if (receiver != null) {
+            MediaStreamTrack receiverTrack = receiver.track();
+            if (receiverTrack != null && receiverTrack.id().equals(trackId)) {
+              track = receiverTrack;
+              break;
+            }
+          }
         }
+      } catch (IllegalStateException e) {
+        Log.w(TAG, "getTransceiversTrack: transceiver disposed concurrently", e);
       }
     }
     return track;

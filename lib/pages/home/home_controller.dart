@@ -51,6 +51,15 @@ class HomeController extends GetxController {
     storageService.saveDevices(devices);
   }
 
+  /// Removes a device from the list and clears its retained state on the
+  /// broker. It comes back by itself when the camera reconnects.
+  void removeDevice(Device d) {
+    signalingService.removeDevice(d.id);
+    devices.remove(d.id);
+    devices.refresh();
+    storageService.saveDevices(devices);
+  }
+
   Future<void> videoCall(Device target) async {
     await Get.toNamed(Routes.CALL, arguments: [target]);
     saveDevices();

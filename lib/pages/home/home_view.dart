@@ -80,6 +80,7 @@ class HomeView extends GetView<HomeController> {
                     device: list[i],
                     onOpen: () => controller.videoCall(list[i]),
                     onDetails: () => _showDetails(context, list[i]),
+                    onRemove: () => _confirmRemove(context, list[i]),
                   ),
                 );
               });
@@ -121,6 +122,31 @@ class HomeView extends GetView<HomeController> {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  /// Asks for confirmation before removing a device.
+  void _confirmRemove(BuildContext context, Device d) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Remove ${d.name}?'),
+        content: const Text(
+            'The device is removed from your list and from the broker. '
+            'It will reappear on its own if it reconnects.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              controller.removeDevice(d);
+            },
+            child: const Text('Remove'),
+          ),
+        ],
       ),
     );
   }
@@ -196,8 +222,12 @@ class _CameraTile extends StatelessWidget {
   final Device device;
   final VoidCallback onOpen;
   final VoidCallback onDetails;
+  final VoidCallback onRemove;
   const _CameraTile(
-      {required this.device, required this.onOpen, required this.onDetails});
+      {required this.device,
+      required this.onOpen,
+      required this.onDetails,
+      required this.onRemove});
 
   @override
   Widget build(BuildContext context) {
@@ -333,6 +363,16 @@ class _CameraTile extends StatelessWidget {
                             fontSize: 12,
                             fontWeight: FontWeight.w500,
                             color: oc.muted)),
+                    PopupMenuButton<String>(
+                      tooltip: 'More',
+                      padding: EdgeInsets.zero,
+                      icon: Icon(Icons.more_vert, size: 20, color: oc.muted),
+                      onSelected: (v) => v == 'remove' ? onRemove() : onDetails(),
+                      itemBuilder: (_) => const [
+                        PopupMenuItem(value: 'details', child: Text('Details')),
+                        PopupMenuItem(value: 'remove', child: Text('Remove')),
+                      ],
+                    ),
                   ],
                 ),
               ),

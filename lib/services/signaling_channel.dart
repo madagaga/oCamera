@@ -287,6 +287,18 @@ class SignalingService {
         retain: true);
   }
 
+  /// Viewer: removes camera `devId` from the broker by clearing its retained
+  /// `state` (empty retained payload, § 3). It needs write access to that
+  /// topic (ACL); without it the broker ignores the message. A camera that is
+  /// still connected publishes its state again on its next connection.
+  void removeDevice(String devId) {
+    _states.remove(devId);
+    if (_client.connectionStatus?.state != MqttConnectionState.connected) return;
+    _client.publishMessage('ocam/dev/$devId/state', MqttQos.atLeastOnce,
+        MqttClientPayloadBuilder().payload!,
+        retain: true);
+  }
+
   /// Connection test from the login screen: `null` if the broker accepts
   /// the credentials, otherwise a readable message. [onMs] receives the latency.
   static Future<String?> testConnection(

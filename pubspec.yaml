@@ -33,7 +33,7 @@ dependencies:
 
   get: ^4.6.6
   mqtt_client: ^10.5.1
-  flutter_webrtc: ^1.6.2+hotfix.4
+  flutter_webrtc: ^1.6.3
   get_storage: ^2.1.1
   permission_handler: ^13.0.2
   # The following adds the Cupertino Icons font to your application.
@@ -55,7 +55,7 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
 
-# Local copy of flutter_webrtc 1.6.2+hotfix.4 with a configurable recording bitrate
+# Local copy of flutter_webrtc 1.6.3 with a configurable recording bitrate
 # (third_party/flutter_webrtc, see docs in the commit message). Remove this block
 # to go back to the published plugin.
 dependency_overrides:

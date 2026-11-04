@@ -174,7 +174,7 @@ packages:
       path: "third_party/flutter_webrtc"
       relative: true
     source: path
-    version: "1.6.2+hotfix.4"
+    version: "1.6.3"
   gal:
     dependency: "direct main"
     description:

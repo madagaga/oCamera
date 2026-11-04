@@ -5,6 +5,7 @@ import 'package:rtc/services/camera_service.dart';
 import 'package:rtc/services/signaling_channel.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart' as webrtc;
 import 'package:get_storage/get_storage.dart';
 import 'package:rtc/services/storage_service.dart';
 
@@ -32,7 +33,15 @@ Future _initializeServices() async {
   StorageService storageService = StorageService();
 
   // load user
-  Get.put(storageService.loadUser(), permanent: true);
+  final user = storageService.loadUser();
+  Get.put(user, permanent: true);
+
+  // A camera phone plays nothing: echo cancellation and noise suppression
+  // would only dull the ambient sound. Raw microphone source instead. The
+  // plugin reads this once, so a role change needs an app restart.
+  if (user.isCamera) {
+    await webrtc.WebRTC.initialize(options: {'bypassVoiceProcessing': true});
+  }
 
   Get.put(storageService.loadDevices(), permanent: true);
 

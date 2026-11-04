@@ -29,6 +29,15 @@ class CallController extends GetxController {
   /// `earpiece`, `bluetooth`, `wired-headset`), or null for no sound (default).
   final Rxn<String> audioDevice = Rxn<String>();
 
+  /// Software gain applied to the received audio (1, 2 or 3), remembered
+  /// between calls. The camera microphone is often quiet.
+  static const gainStorageKey = 'audioGain';
+  static const gainLevels = [1, 2, 3];
+  final RxInt audioGain = (() {
+    final v = GetStorage().read<int>(gainStorageKey);
+    return gainLevels.contains(v) ? v! : 1;
+  })().obs;
+
   /// Outputs available right now (a headset can come and go).
   final RxList<String> audioOutputs = <String>[].obs;
   RxBool connected = false.obs;
@@ -97,6 +106,10 @@ class CallController extends GetxController {
   /// Buttons according to the capabilities announced by the camera.
   bool get canFlip => target.value.caps.cmds.contains('flip');
   bool get canToggleVideo => target.value.isPhone;
+
+  /// Camera in use (`back` / `front`), null when unknown. Follows the camera's
+  /// `state` (polled with the stats).
+  final Rxn<String> facing = Rxn<String>();
 
   @override
   Future<void> onInit() async {
@@ -194,12 +207,37 @@ class CallController extends GetxController {
     for (final track in tracks) {
       track.enabled = !muted;
       try {
-        await webrtc.Helper.setVolume(muted ? 0.0 : 1.0, track);
+        await webrtc.Helper.setVolume(muted ? 0.0 : audioGain.value.toDouble(), track);
       } catch (e) {
         debugPrint('[Audio] setVolume failed: $e');
       }
     }
     debugPrint('[Audio] ${muted ? 'muted' : 'unmuted'} (${tracks.length} track(s))');
+    _syncCameraMedia('audio', !muted);
+  }
+
+  /// Last `audio` state asked of the camera (null: nothing sent, the camera
+  /// sends audio by default).
+  bool? _cameraAudioOn;
+
+  /// Asks the camera to stop (or resume) sending a medium, so that muting here
+  /// also saves its bandwidth and keeps the microphone private. Cameras that
+  /// do not list the command keep the local-only behaviour.
+  void _syncCameraMedia(String name, bool on) {
+    if (!target.value.caps.cmds.contains(name)) return;
+    if (name == 'audio') {
+      // before the remote audio track exists the session is not up yet
+      if (_remoteAudio == null || (_cameraAudioOn ?? true) == on) return;
+      _cameraAudioOn = on;
+    }
+    _sendCommand(name, {'on': on});
+  }
+
+  Future<void> setAudioGain(int gain) async {
+    if (!gainLevels.contains(gain)) return;
+    audioGain.value = gain;
+    GetStorage().write(gainStorageKey, gain);
+    await _applyMute();
   }
 
   /// Turns the sound on with the best available output.
@@ -522,9 +560,18 @@ class CallController extends GetxController {
   static num? _num(dynamic v) => v is num ? v : num.tryParse('$v');
 
   /// Link type (direct / relayed) and video bitrate, from `getStats()`.
+  String? _lastStateFacing;
+
   Future<void> _pollStats() async {
     final peer = _peer;
     if (peer == null) return;
+    // adopt the camera's announced facing only when it changes, so that the
+    // user's choice is not overwritten before the camera republishes its state
+    final announced = target.value.facing;
+    if (announced != _lastStateFacing) {
+      _lastStateFacing = announced;
+      if (announced != null) facing.value = announced;
+    }
     try {
       final start = _connectedAt;
       if (start != null) {
@@ -573,7 +620,12 @@ class CallController extends GetxController {
       _lastStatsAt = now;
       if (isRelay != null) {
         relayed.value = isRelay;
-        linkLabel.value = '${isRelay ? 'Relayed' : 'Direct'}$codec$rate';
+        final facing = switch (target.value.facing) {
+          'back' => ' · Rear cam',
+          'front' => ' · Front cam',
+          _ => '',
+        };
+        linkLabel.value = '${isRelay ? 'Relayed' : 'Direct'}$codec$rate$facing';
       }
     } catch (e) {
       debugPrint('getStats failed: $e');
@@ -617,15 +669,29 @@ class CallController extends GetxController {
     Get.toNamed(Routes.CALL, arguments: [device]);
   }
 
-  void remoteSwitchCamera() => _sendCommand('flip');
 
   // ---- media -------------------------------------------------------------
 
-  void toggleVideo() {
-    enableVideo.value = !enableVideo.value;
-    for (final track in _remoteStream?.getVideoTracks() ?? []) {
-      track.enabled = enableVideo.value;
+  /// Video menu choice: `off` (no video) or `flip` (switch camera, which also
+  /// brings the video back). Like the audio output menu, everything about the
+  /// video goes through this one entry point: the camera is told to stop
+  /// sending (`video`) or to switch (`flip`).
+  void selectVideo(String choice) {
+    if (choice == 'off') {
+      _setVideoEnabled(false);
+      return;
     }
+    _setVideoEnabled(true);
+    if (choice == 'flip') _sendCommand('flip');
+  }
+
+  void _setVideoEnabled(bool on) {
+    if (enableVideo.value == on) return;
+    enableVideo.value = on;
+    for (final track in _remoteStream?.getVideoTracks() ?? []) {
+      track.enabled = on;
+    }
+    _syncCameraMedia('video', on);
   }
 
   Future<void> captureSnapshot() async {

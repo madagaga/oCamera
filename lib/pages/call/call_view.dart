@@ -2,12 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:get/get.dart';
 import 'package:rtc/pages/call/call_controller.dart';
+import 'package:rtc/pages/call/dock_menu.dart';
 import 'package:rtc/models/devices.dart';
 import 'package:rtc/theme/app_theme.dart';
 
-/// Shows the audio output selector in the control bar. Audio is muted by
-/// default.
-const bool kShowAudioControl = true;
+/// Shows the extra controls of the control bar: the audio output selector
+/// (audio is muted by default) and the recording button. Hide them at build
+/// time with `--dart-define=SHOW_EXTRA_CONTROLS=false`.
+const bool kShowExtraControls =
+    bool.fromEnvironment('SHOW_EXTRA_CONTROLS', defaultValue: true);
 
 /// Live view: full-screen video, translucent bars hidden after 4 s.
 class CallView extends GetView<CallController> {
@@ -54,20 +57,20 @@ class CallView extends GetView<CallController> {
                 ),
               ),
             ),
-            Obx(() => controller.connected.value ||
-                    controller.error.value.isNotEmpty
-                ? const SizedBox.shrink()
-                : const Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        CircularProgressIndicator(color: Colors.white),
-                        SizedBox(height: 12),
-                        Text('Connecting…',
-                            style: TextStyle(color: Color(0xFFE6E9EB))),
-                      ],
-                    ),
-                  )),
+            Obx(() =>
+                controller.connected.value || controller.error.value.isNotEmpty
+                    ? const SizedBox.shrink()
+                    : const Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            CircularProgressIndicator(color: Colors.white),
+                            SizedBox(height: 12),
+                            Text('Connecting…',
+                                style: TextStyle(color: Color(0xFFE6E9EB))),
+                          ],
+                        ),
+                      )),
             SafeArea(
               child: Stack(
                 children: [
@@ -226,8 +229,12 @@ class CallView extends GetView<CallController> {
             color: const Color(0xA60A0C0E),
             borderRadius: BorderRadius.circular(4)),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(controller.relayed.value ? Icons.alt_route : Icons.arrow_right_alt,
-              size: 14, color: const Color(0xFFE6E9EB)),
+          Icon(
+              controller.relayed.value
+                  ? Icons.alt_route
+                  : Icons.arrow_right_alt,
+              size: 14,
+              color: const Color(0xFFE6E9EB)),
           const SizedBox(width: 6),
           Text(label,
               style: const TextStyle(
@@ -293,7 +300,8 @@ class CallView extends GetView<CallController> {
   }
 
   /// Output selector: the available outputs (Bluetooth or wired headset when
-  /// connected, loudspeaker, earpiece) and "No sound".
+  /// connected, loudspeaker, earpiece), "No sound" and the volume boost, shown
+  /// as a dock above the button.
   Widget _audioToggle() {
     IconData icon(String? id) => switch (id) {
           'bluetooth' => Icons.bluetooth_audio,
@@ -309,57 +317,76 @@ class CallView extends GetView<CallController> {
           'earpiece' => 'Earpiece',
           _ => 'No sound',
         };
+    return Obx(() => DockMenu(
+          icon: icon(controller.audioDevice.value),
+          tooltip: 'Audio output',
+          barVisible: controller.controlsVisible,
+          onTap: () {
+            controller.showControls();
+            controller.refreshAudioOutputs();
+          },
+          items: () {
+            final current = controller.audioDevice.value;
+            final gain = controller.audioGain.value;
+            final levels = CallController.gainLevels;
+            return [
+              for (final id in [...controller.audioOutputs, 'off'])
+                DockItem(
+                  icon: icon(id == 'off' ? null : id),
+                  label: label(id == 'off' ? null : id),
+                  selected: id == (current ?? 'off'),
+                  onTap: () =>
+                      controller.setAudioDevice(id == 'off' ? null : id),
+                ),
+              // one entry that cycles x1 -> x2 -> x3 and stays open
+              DockItem(
+                text: 'x$gain',
+                label: gain == 1 ? 'Volume x1' : 'Volume boost x$gain',
+                keepOpen: true,
+                onTap: () => controller.setAudioGain(
+                    levels[(levels.indexOf(gain) + 1) % levels.length]),
+              ),
+            ];
+          },
+        ));
+  }
+
+  /// Video menu: switch camera or no video, as a dock above the button. The
+  /// icon shows the camera in use when the camera announces it.
+  Widget _videoMenu() {
     return Obx(() {
-      final current = controller.audioDevice.value;
-      return PopupMenuButton<String>(
-        tooltip: 'Audio output',
-        onOpened: () {
-          controller.showControls();
-          controller.refreshAudioOutputs();
-        },
-        onSelected: (id) {
-          controller.showControls();
-          controller.setAudioDevice(id == 'off' ? null : id);
-        },
-        itemBuilder: (_) => [
-          for (final id in [...controller.audioOutputs, 'off'])
-            CheckedPopupMenuItem(
-              value: id,
-              checked: id == (current ?? 'off'),
-              child: Row(children: [
-                Icon(icon(id == 'off' ? null : id), size: 20),
-                const SizedBox(width: 12),
-                Text(label(id == 'off' ? null : id)),
-              ]),
+      final off = !controller.enableVideo.value;
+      final icon = off
+          ? Icons.videocam_off
+          : switch (controller.facing.value) {
+              'back' => Icons.camera_rear,
+              'front' => Icons.camera_front,
+              _ => Icons.videocam,
+            };
+      return DockMenu(
+        icon: icon,
+        tooltip: 'Video',
+        barVisible: controller.controlsVisible,
+        onTap: controller.showControls,
+        items: () => [
+          if (controller.canFlip)
+            DockItem(
+              icon: Icons.cameraswitch_outlined,
+              label: 'Switch camera',
+              onTap: () => controller.selectVideo('flip'),
             ),
+          DockItem(
+            icon: Icons.videocam_off,
+            label: 'No video',
+            selected: !controller.enableVideo.value,
+            onTap: () => controller.selectVideo('off'),
+          ),
         ],
-        child: Container(
-          width: 56,
-          height: 56,
-          decoration: const BoxDecoration(
-              color: Color(0x1FFFFFFF), shape: BoxShape.circle),
-          child: Icon(icon(current), color: Colors.white),
-        ),
       );
     });
   }
 
   Widget _controlBar() {
-    Widget round(IconData icon, String tip, VoidCallback onTap) => IconButton(
-          tooltip: tip,
-          iconSize: 24,
-          style: IconButton.styleFrom(
-            backgroundColor: const Color(0x1FFFFFFF),
-            fixedSize: const Size(56, 56),
-          ),
-          color: Colors.white,
-          icon: Icon(icon),
-          onPressed: () {
-            controller.showControls();
-            onTap();
-          },
-        );
-
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 32),
       height: 80,
@@ -369,37 +396,28 @@ class CallView extends GetView<CallController> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          if (kShowAudioControl) _audioToggle(),
-          if (controller.canFlip)
-            round(Icons.cameraswitch_outlined, 'Flip camera',
-                controller.remoteSwitchCamera),
-          if (controller.canToggleVideo)
-            Obx(() => round(
-                controller.enableVideo.value
-                    ? Icons.videocam
-                    : Icons.videocam_off,
-                'Toggle video',
-                controller.toggleVideo)),
-          Obx(() => IconButton(
-                tooltip: controller.recording.value
-                    ? 'Stop recording'
-                    : 'Record',
-                iconSize: 24,
-                style: IconButton.styleFrom(
-                  backgroundColor: const Color(0x1FFFFFFF),
-                  fixedSize: const Size(56, 56),
-                ),
-                color: controller.recording.value
-                    ? Colors.white
-                    : const Color(0xFFFF5252),
-                icon: Icon(controller.recording.value
-                    ? Icons.stop
-                    : Icons.fiber_manual_record),
-                onPressed: () {
-                  controller.showControls();
-                  controller.toggleRecording();
-                },
-              )),
+          if (kShowExtraControls) _audioToggle(),
+          if (controller.canToggleVideo) _videoMenu(),
+          if (kShowExtraControls)
+            Obx(() => IconButton(
+                  tooltip:
+                      controller.recording.value ? 'Stop recording' : 'Record',
+                  iconSize: 24,
+                  style: IconButton.styleFrom(
+                    backgroundColor: const Color(0x1FFFFFFF),
+                    fixedSize: const Size(56, 56),
+                  ),
+                  color: controller.recording.value
+                      ? Colors.white
+                      : const Color(0xFFFF5252),
+                  icon: Icon(controller.recording.value
+                      ? Icons.stop
+                      : Icons.fiber_manual_record),
+                  onPressed: () {
+                    controller.showControls();
+                    controller.toggleRecording();
+                  },
+                )),
           IconButton(
             tooltip: 'Hang up',
             style: IconButton.styleFrom(
