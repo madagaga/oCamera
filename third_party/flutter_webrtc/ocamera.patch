@@ -1,0 +1,436 @@
+diff -ruN --strip-trailing-cr -x .git -x build -x example -x OCAMERA_PATCH.md -x ocamera.patch -x '*.iml' /c/Users/madagaga/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_webrtc-1.6.3/android/src/main/java/com/cloudwebrtc/webrtc/GetUserMediaImpl.java ./android/src/main/java/com/cloudwebrtc/webrtc/GetUserMediaImpl.java
+--- a/android/src/main/java/com/cloudwebrtc/webrtc/GetUserMediaImpl.java	2026-11-04 13:56:00.418651400 +0100
++++ b/android/src/main/java/com/cloudwebrtc/webrtc/GetUserMediaImpl.java	2026-11-04 13:57:21.446738200 +0100
+@@ -1123,7 +1123,8 @@
+      * @throws Exception lot of different exceptions, pass back to dart layer to print them at least
+      */
+     void startRecordingToFile(
+-            String path, Integer id, @Nullable VideoTrack videoTrack, @Nullable AudioChannel audioChannel)
++            String path, Integer id, @Nullable VideoTrack videoTrack, @Nullable AudioChannel audioChannel,
++            int bitrate, int frameRate)
+             throws Exception {
+         AudioSamplesInterceptor interceptor = null;
+         if (audioChannel == AudioChannel.INPUT) {
+@@ -1134,7 +1135,7 @@
+             }
+             interceptor = outputSamplesInterceptor;
+         }
+-        MediaRecorderImpl mediaRecorder = new MediaRecorderImpl(id, videoTrack, interceptor);
++        MediaRecorderImpl mediaRecorder = new MediaRecorderImpl(id, videoTrack, interceptor, bitrate, frameRate);
+         mediaRecorder.startRecording(new File(path));
+         mediaRecorders.append(id, mediaRecorder);
+     }
+diff -ruN --strip-trailing-cr -x .git -x build -x example -x OCAMERA_PATCH.md -x ocamera.patch -x '*.iml' /c/Users/madagaga/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_webrtc-1.6.3/android/src/main/java/com/cloudwebrtc/webrtc/MethodCallHandlerImpl.java ./android/src/main/java/com/cloudwebrtc/webrtc/MethodCallHandlerImpl.java
+--- a/android/src/main/java/com/cloudwebrtc/webrtc/MethodCallHandlerImpl.java	2026-11-04 13:56:00.410866000 +0100
++++ b/android/src/main/java/com/cloudwebrtc/webrtc/MethodCallHandlerImpl.java	2026-11-04 14:02:36.554244200 +0100
+@@ -949,8 +949,12 @@
+             audioChannel = AudioChannel.values()[(Integer) call.argument("audioChannel")];
+           }
+           Integer recorderId = call.argument("recorderId");
++          // oCamera patch: optional video bitrate (bps) and frame rate for the recording
++          Integer bitrate = call.argument("bitrate");
++          Integer frameRate = call.argument("frameRate");
+           if (videoTrack != null || audioChannel != null) {
+-            getUserMediaImpl.startRecordingToFile(path, recorderId, videoTrack, audioChannel);
++            getUserMediaImpl.startRecordingToFile(path, recorderId, videoTrack, audioChannel,
++                    bitrate != null ? bitrate : 0, frameRate != null ? frameRate : 0);
+             result.success(null);
+           } else {
+             resultError("startRecordToFile", "No tracks", result);
+diff -ruN --strip-trailing-cr -x .git -x build -x example -x OCAMERA_PATCH.md -x ocamera.patch -x '*.iml' /c/Users/madagaga/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_webrtc-1.6.3/android/src/main/java/com/cloudwebrtc/webrtc/PeerConnectionObserver.java ./android/src/main/java/com/cloudwebrtc/webrtc/PeerConnectionObserver.java
+--- a/android/src/main/java/com/cloudwebrtc/webrtc/PeerConnectionObserver.java	2026-11-04 13:56:00.365555400 +0100
++++ b/android/src/main/java/com/cloudwebrtc/webrtc/PeerConnectionObserver.java	2026-11-04 13:57:21.445733400 +0100
+@@ -65,7 +65,7 @@
+   // that exact object.
+   private final Map<String, MediaStreamTrack> remoteTracksByReceiver =
+       new ConcurrentHashMap<>();
+-  final Map<String, RtpTransceiver> transceivers = new HashMap<>();
++  final Map<String, RtpTransceiver> transceivers = new ConcurrentHashMap<>();
+   private final StateProvider stateProvider;
+   private final EventChannel eventChannel;
+   private EventChannel.EventSink eventSink;
+@@ -105,14 +105,21 @@
+   }
+ 
+   void restartIce() {
++    if (peerConnection == null) {
++      Log.w(TAG, "restartIce(): peerConnection is null");
++      return;
++    }
+     peerConnection.restartIce();
+   }
+ 
+   void close() {
+-    peerConnection.close();
++    if (peerConnection != null) {
++      peerConnection.close();
++    }
+     remoteStreams.clear();
+     remoteTracks.clear();
+     remoteTracksByReceiver.clear();
++    trackTransceivers.clear();
+     // The data channels stay registered until dispose() so that their event
+     // channel handlers can be released there. Closing the peer connection
+     // already closes them.
+@@ -125,7 +132,9 @@
+     for (String dataChannelId : new ArrayList<>(dataChannels.keySet())) {
+       disposeDataChannel(dataChannelId);
+     }
+-    peerConnection.dispose();
++    if (peerConnection != null) {
++      peerConnection.dispose();
++    }
+     eventChannel.setStreamHandler(null);
+   }
+ 
+@@ -223,31 +232,54 @@
+   RtpTransceiver getRtpTransceiverById(String id) {
+     RtpTransceiver transceiver = transceivers.get(id);
+     if (null == transceiver) {
+-      List<RtpTransceiver> transceivers = peerConnection.getTransceivers();
+-      for (RtpTransceiver t : transceivers) {
+-        if (id.equals(t.getMid())) {
+-          transceiver = t;
++      synchronized (transceiversLock) {
++        try {
++          List<RtpTransceiver> transceivers = peerConnection.getTransceivers();
++          for (RtpTransceiver t : transceivers) {
++            if (id.equals(t.getMid())) {
++              transceiver = t;
++            }
++          }
++        } catch (IllegalStateException e) {
++          Log.w(TAG, "getRtpTransceiverById: transceiver disposed concurrently", e);
+         }
+       }
+     }
+     return transceiver;
+   }
+ 
++  // PeerConnection.getTransceivers() disposes the previously returned list on every call and
++  // is not thread-safe: an unsynchronized overlap throws IllegalStateException on a native
++  // thread, which aborts the process (SIGABRT). Every use from the main thread must hold this
++  // lock. The signaling thread (onAddTrack) must NOT take it: the main thread holds it while
++  // blocked on the signaling thread, which would deadlock.
++  private final Object transceiversLock = new Object();
++
+   RtpSender getRtpSenderById(String id) {
+-    List<RtpSender> senders = peerConnection.getSenders();
+-    for (RtpSender sender : senders) {
+-      if (id.equals(sender.id())) {
+-        return sender;
++    synchronized (transceiversLock) {
++      try {
++        for (RtpSender sender : peerConnection.getSenders()) {
++          if (id.equals(sender.id())) {
++            return sender;
++          }
++        }
++      } catch (IllegalStateException e) {
++        Log.w(TAG, "getRtpSenderById: sender disposed concurrently", e);
+       }
+     }
+     return null;
+   }
+ 
+   RtpReceiver getRtpReceiverById(String id) {
+-    List<RtpReceiver> receivers = peerConnection.getReceivers();
+-    for (RtpReceiver receiver : receivers) {
+-      if (id.equals(receiver.id())) {
+-        return receiver;
++    synchronized (transceiversLock) {
++      try {
++        for (RtpReceiver receiver : peerConnection.getReceivers()) {
++          if (id.equals(receiver.id())) {
++            return receiver;
++          }
++        }
++      } catch (IllegalStateException e) {
++        Log.w(TAG, "getRtpReceiverById: receiver disposed concurrently", e);
+       }
+     }
+     return null;
+@@ -328,16 +360,22 @@
+ 
+     RtpSender sender = null;
+     RtpReceiver receiver = null;
+-    for (RtpSender s : peerConnection.getSenders()) {
+-      if (s.track() != null && trackId.equals(s.track().id())) {
+-        sender = s;
+-        break;
+-      }
+-    }
+-    for (RtpReceiver r : peerConnection.getReceivers()) {
+-      if (r.track() != null && trackId.equals(r.track().id())) {
+-        receiver = r;
+-        break;
++    synchronized (transceiversLock) {
++      try {
++        for (RtpSender s : peerConnection.getSenders()) {
++          if (s.track() != null && trackId.equals(s.track().id())) {
++            sender = s;
++            break;
++          }
++        }
++        for (RtpReceiver r : peerConnection.getReceivers()) {
++          if (r.track() != null && trackId.equals(r.track().id())) {
++            receiver = r;
++            break;
++          }
++        }
++      } catch (IllegalStateException e) {
++        Log.w(TAG, "getStatsForTrack: sender/receiver disposed concurrently", e);
+       }
+     }
+     if (sender != null) {
+@@ -512,8 +550,18 @@
+     sendEvent(params);
+   }
+ 
++  // Transceivers announced by onTrack, keyed by receiver id. onAddTrack (signaling thread)
++  // reads this map instead of calling peerConnection.getTransceivers() under transceiversLock:
++  // the main thread holds that lock while its own getTransceivers() blocks on the signaling
++  // thread, so taking the lock on the signaling thread was a lock-order deadlock.
++  private final Map<String, RtpTransceiver> trackTransceivers = new ConcurrentHashMap<>();
++
+   @Override
+   public void onTrack(RtpTransceiver transceiver) {
++    RtpReceiver receiver = transceiver.getReceiver();
++    if (receiver != null) {
++      trackTransceivers.put(receiver.id(), transceiver);
++    }
+   }
+ 
+   @Override
+@@ -575,16 +623,18 @@
+         stateProvider.onRemoteTrackAdded(id, streamId, receiverTrack);
+       }
+ 
+-      List<RtpTransceiver> transceivers = peerConnection.getTransceivers();
+-      for (RtpTransceiver transceiver : transceivers) {
+-        if (transceiver.getReceiver() != null && receiver.id().equals(transceiver.getReceiver().id())) {
+-          String transceiverId = transceiver.getMid();
+-          if (null == transceiverId) {
+-            transceiverId = stateProvider.getNextStreamUUID();
+-            this.transceivers.put(transceiverId,transceiver);
+-          }
+-          params.putMap("transceiver", transceiverToMap(transceiverId, transceiver));
++      // No native call and no lock here: see trackTransceivers. If onTrack has not fired yet
++      // the event goes out without a transceiver (the Dart side treats it as optional).
++      RtpTransceiver transceiver = trackTransceivers.get(receiver.id());
++      if (transceiver != null) {
++        String transceiverId = transceiver.getMid();
++        if (null == transceiverId) {
++          transceiverId = stateProvider.getNextStreamUUID();
++          this.transceivers.put(transceiverId, transceiver);
+         }
++        params.putMap("transceiver", transceiverToMap(transceiverId, transceiver));
++      } else {
++        Log.w(TAG, "onAddTrack: no transceiver announced for receiver " + receiver.id());
+       }
+     }
+     sendEvent(params);
+@@ -596,6 +646,7 @@
+ 
+     MediaStreamTrack track = rtpReceiver.track();
+     String trackId = track.id();
++    trackTransceivers.remove(rtpReceiver.id());
+     MediaStreamTrack registered = remoteTracksByReceiver.remove(rtpReceiver.id());
+     if (registered != null) {
+       remoteTracks.remove(trackId, registered);
+@@ -1255,15 +1306,21 @@
+   }
+ 
+   public void getTransceivers(Result result) {
+-    List<RtpTransceiver> transceivers = peerConnection.getTransceivers();
+     ConstraintsArray transceiversParams = new ConstraintsArray();
+-    for (RtpTransceiver transceiver : transceivers) {
+-      String transceiverId = transceiver.getMid();
+-      if (null == transceiverId) {
+-        transceiverId = stateProvider.getNextStreamUUID();
+-        this.transceivers.put(transceiverId,transceiver);
++    synchronized (transceiversLock) {
++      try {
++        List<RtpTransceiver> transceivers = peerConnection.getTransceivers();
++        for (RtpTransceiver transceiver : transceivers) {
++          String transceiverId = transceiver.getMid();
++          if (null == transceiverId) {
++            transceiverId = stateProvider.getNextStreamUUID();
++            this.transceivers.put(transceiverId,transceiver);
++          }
++          transceiversParams.pushMap(new ConstraintsMap(transceiverToMap(transceiverId, transceiver)));
++        }
++      } catch (IllegalStateException e) {
++        Log.w(TAG, "getTransceivers: transceiver disposed concurrently", e);
+       }
+-      transceiversParams.pushMap(new ConstraintsMap(transceiverToMap(transceiverId, transceiver)));
+     }
+     ConstraintsMap params = new ConstraintsMap();
+     params.putArray("transceivers", transceiversParams.toArrayList());
+@@ -1275,15 +1332,21 @@
+       return null;
+     }
+     MediaStreamTrack track = null;
+-    List<RtpTransceiver> transceivers = peerConnection.getTransceivers();
+-    for (RtpTransceiver transceiver : transceivers) {
+-      RtpReceiver receiver = transceiver.getReceiver();
+-      if (receiver != null) {
+-        MediaStreamTrack receiverTrack = receiver.track();
+-        if (receiverTrack != null && receiverTrack.id().equals(trackId)) {
+-          track = receiverTrack;
+-          break;
++    synchronized (transceiversLock) {
++      try {
++        List<RtpTransceiver> transceivers = peerConnection.getTransceivers();
++        for (RtpTransceiver transceiver : transceivers) {
++          RtpReceiver receiver = transceiver.getReceiver();
++          if (receiver != null) {
++            MediaStreamTrack receiverTrack = receiver.track();
++            if (receiverTrack != null && receiverTrack.id().equals(trackId)) {
++              track = receiverTrack;
++              break;
++            }
++          }
+         }
++      } catch (IllegalStateException e) {
++        Log.w(TAG, "getTransceiversTrack: transceiver disposed concurrently", e);
+       }
+     }
+     return track;
+diff -ruN --strip-trailing-cr -x .git -x build -x example -x OCAMERA_PATCH.md -x ocamera.patch -x '*.iml' /c/Users/madagaga/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_webrtc-1.6.3/android/src/main/java/com/cloudwebrtc/webrtc/record/MediaRecorderImpl.java ./android/src/main/java/com/cloudwebrtc/webrtc/record/MediaRecorderImpl.java
+--- a/android/src/main/java/com/cloudwebrtc/webrtc/record/MediaRecorderImpl.java	2026-11-04 13:56:00.429763700 +0100
++++ b/android/src/main/java/com/cloudwebrtc/webrtc/record/MediaRecorderImpl.java	2026-11-04 13:57:21.475720700 +0100
+@@ -20,9 +20,14 @@
+     private AudioFileRenderer audioFileRenderer;
+     private boolean isRunning = false;
+     private File recordFile;
++    // oCamera patch: requested recording bitrate (bps) and frame rate, 0 = plugin default
++    private final int bitrate;
++    private final int frameRate;
+ 
+     public MediaRecorderImpl(Integer id, @Nullable VideoTrack videoTrack,
+-            @Nullable AudioSamplesInterceptor audioInterceptor) {
++            @Nullable AudioSamplesInterceptor audioInterceptor, int bitrate, int frameRate) {
++        this.bitrate = bitrate;
++        this.frameRate = frameRate;
+         this.id = id;
+         this.videoTrack = videoTrack;
+         this.audioInterceptor = audioInterceptor;
+@@ -39,7 +44,9 @@
+             videoFileRenderer = new VideoFileRenderer(
+                     file.getAbsolutePath(),
+                     EglUtils.getRootEglBaseContext(),
+-                    audioInterceptor != null);
++                    audioInterceptor != null,
++                    bitrate,
++                    frameRate);
+             videoTrack.addSink(videoFileRenderer);
+             if (audioInterceptor != null)
+                 audioInterceptor.attachCallback(id, videoFileRenderer);
+diff -ruN --strip-trailing-cr -x .git -x build -x example -x OCAMERA_PATCH.md -x ocamera.patch -x '*.iml' /c/Users/madagaga/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_webrtc-1.6.3/android/src/main/java/com/cloudwebrtc/webrtc/record/VideoFileRenderer.java ./android/src/main/java/com/cloudwebrtc/webrtc/record/VideoFileRenderer.java
+--- a/android/src/main/java/com/cloudwebrtc/webrtc/record/VideoFileRenderer.java	2026-11-04 13:56:00.426093900 +0100
++++ b/android/src/main/java/com/cloudwebrtc/webrtc/record/VideoFileRenderer.java	2026-11-04 13:57:21.476179900 +0100
+@@ -61,8 +61,14 @@
+     private Surface surface;
+     private MediaCodec audioEncoder;
+     private boolean encoderInitFailed = false;
+-
+-    VideoFileRenderer(String outputFile, final EglBase.Context sharedContext, boolean withAudio) throws IOException {
++    // oCamera patch: requested bitrate (bps) and frame rate, 0 = plugin default
++    private final int requestedBitrate;
++    private final int frameRate;
++
++    VideoFileRenderer(String outputFile, final EglBase.Context sharedContext, boolean withAudio,
++            int requestedBitrate, int requestedFrameRate) throws IOException {
++        this.requestedBitrate = requestedBitrate;
++        this.frameRate = requestedFrameRate > 0 ? requestedFrameRate : FRAME_RATE;
+         renderThread = new HandlerThread(TAG + "RenderThread");
+         renderThread.start();
+         renderThreadHandler = new Handler(renderThread.getLooper());
+@@ -90,13 +96,32 @@
+             MediaFormat format = MediaFormat.createVideoFormat(MIME_TYPE, config.width, config.height);
+             format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
+             format.setInteger(MediaFormat.KEY_BIT_RATE, config.bitrate);
+-            format.setInteger(MediaFormat.KEY_FRAME_RATE, FRAME_RATE);
+-            format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, IFRAME_INTERVAL);
++            format.setInteger(MediaFormat.KEY_FRAME_RATE, frameRate);
++            // oCamera patch: with a requested bitrate, key frames are rarer (they are
++            // large: one every 5 s added about 50 kb/s at 640x360)
++            format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL,
++                    requestedBitrate > 0 ? 10 : IFRAME_INTERVAL);
+ 
+             Log.d(TAG, "Trying encoder config: " + config);
+ 
+             encoder = MediaCodec.createEncoderByType(MIME_TYPE);
+             String codecName = encoder.getName();
++            // oCamera patch: constant bitrate when asked for a bitrate and supported. The
++            // default variable mode overshoots at low bitrates (about +45 % measured).
++            if (requestedBitrate > 0) {
++                try {
++                    MediaCodecInfo.EncoderCapabilities enc = encoder.getCodecInfo()
++                            .getCapabilitiesForType(MIME_TYPE).getEncoderCapabilities();
++                    if (enc != null && enc.isBitrateModeSupported(
++                            MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)) {
++                        format.setInteger(MediaFormat.KEY_BITRATE_MODE,
++                                MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR);
++                        Log.d(TAG, "Bitrate mode: CBR at " + config.bitrate);
++                    }
++                } catch (Exception e) {
++                    Log.w(TAG, "Cannot select CBR: " + e.getMessage());
++                }
++            }
+             Log.d(TAG, "Codec name: " + codecName);
+             if (shouldForceCodecProfile(codecName)) {
+                 format.setInteger(MediaFormat.KEY_PROFILE, config.profile);
+@@ -159,7 +184,11 @@
+ 
+     private List<EncoderConfig> getSupportedConfigurations(int frameWidth, int frameHeight) {
+         
+-        int[] bitrates = {6000000, 4000000, 2000000, 1000000};
++        // The default tries 6 Mb/s first, which gives ~1.7 Mb/s on a 640x360 stream.
++        // With a requested bitrate, only that bitrate is used.
++        int[] bitrates = requestedBitrate > 0
++                ? new int[]{requestedBitrate}
++                : new int[]{6000000, 4000000, 2000000, 1000000};
+         int[] profiles = {
+                 MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline,
+                 MediaCodecInfo.CodecProfileLevel.AVCProfileMain,
+diff -ruN --strip-trailing-cr -x .git -x build -x example -x OCAMERA_PATCH.md -x ocamera.patch -x '*.iml' /c/Users/madagaga/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_webrtc-1.6.3/lib/flutter_webrtc.dart ./lib/flutter_webrtc.dart
+--- a/lib/flutter_webrtc.dart	2026-11-04 13:56:00.332664800 +0100
++++ b/lib/flutter_webrtc.dart	2026-11-04 13:57:21.589934000 +0100
+@@ -7,6 +7,8 @@
+ export 'src/desktop_capturer.dart';
+ export 'src/media_devices.dart';
+ export 'src/media_recorder.dart';
++// oCamera patch: lets the app set the recording bitrate (Android)
++export 'src/native/media_recorder_impl.dart' show MediaRecorderNative;
+ export 'src/video_renderer_extension.dart';
+ export 'src/native/factory_impl.dart'
+     if (dart.library.js_interop) 'src/web/factory_impl.dart';
+diff -ruN --strip-trailing-cr -x .git -x build -x example -x OCAMERA_PATCH.md -x ocamera.patch -x '*.iml' /c/Users/madagaga/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_webrtc-1.6.3/lib/src/native/media_recorder_impl.dart ./lib/src/native/media_recorder_impl.dart
+--- a/lib/src/native/media_recorder_impl.dart	2026-11-04 13:56:00.303532100 +0100
++++ b/lib/src/native/media_recorder_impl.dart	2026-11-04 13:57:21.604774400 +0100
+@@ -9,7 +9,14 @@
+ class MediaRecorderNative extends MediaRecorder {
+   MediaRecorderNative({
+     String? albumName = 'FlutterWebRTC',
++    this.bitrate,
++    this.frameRate,
+   }) : _albumName = albumName;
++
++  /// oCamera patch (Android): video bitrate in bits per second and frame rate
++  /// of the recording. Null keeps the plugin default (6 Mb/s first).
++  final int? bitrate;
++  final int? frameRate;
+   static final _random = Random();
+   final _recorderId = _random.nextInt(0x7FFFFFFF);
+   var _isStarted = false;
+@@ -30,6 +37,8 @@
+       if (audioChannel != null) 'audioChannel': audioChannel.index,
+       if (videoTrack != null) 'videoTrackId': videoTrack.id,
+       'recorderId': _recorderId,
++      if (bitrate != null) 'bitrate': bitrate,
++      if (frameRate != null) 'frameRate': frameRate,
+       'peerConnectionId': videoTrack is MediaStreamTrackNative
+           ? videoTrack.peerConnectionId
+           : null

@@ -44,6 +44,10 @@ class Device {
 
   /// Battery of a phone camera; null when the camera does not report one.
   BatteryInfo? battery;
+
+  /// Camera in use during a session (`back` or `front`); null when unknown
+  /// (no session, or a camera that does not report it).
+  String? facing;
   Uint8List snapshot = Uint8List(0);
 
   /// Stream chosen by the user (`sub`, `main`…); null = camera default.
@@ -78,6 +82,8 @@ class Device {
       caps = DeviceCaps.fromJson(j['caps'] as Map<String, dynamic>);
     }
     battery = BatteryInfo.tryParse(j['battery']);
+    final f = j['facing'];
+    facing = f == 'back' || f == 'front' ? f as String : null;
     final a = j['agent'];
     if (a is Map && a['name'] != null) {
       agent = '${a['name']} ${a['version'] ?? ''}'.trim();

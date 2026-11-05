@@ -60,6 +60,10 @@ class CameraService {
   String? _viewer;
   PeerSession? _peer;
   webrtc.MediaStream? _local;
+
+  /// Camera in use (`back` / `front`), announced in `state` during a session.
+  /// A session always starts on the back camera (`facingMode: environment`).
+  String _facing = 'back';
   Envelope? _lastAnswer;
   DateTime? _startedAt;
   Timer? _connectTimer;
@@ -80,7 +84,7 @@ class CameraService {
         video: _hwCodecs,
         audio: const ['opus'],
         streams: const ['sub', 'main'],
-        cmds: const ['flip', 'torch'],
+        cmds: const ['flip', 'torch', 'video', 'audio'],
       ),
     );
     _signaling.cameraProfile = _profile;
@@ -118,7 +122,8 @@ class CameraService {
         online: true,
         busy: _sid != null,
         viewer: _viewer,
-        battery: _battery.current));
+        battery: _battery.current,
+        facing: _sid != null ? _facing : null));
   }
 
   // ---- incoming messages -------------------------------------------------
@@ -177,6 +182,7 @@ class CameraService {
     // the camera is reserved before any `await`: a second offer gets `busy`
     _sid = sid;
     _viewer = from;
+    _facing = 'back';
     _startedAt = DateTime.now();
     busy.value = true;
     viewer.value = from;
@@ -292,12 +298,35 @@ class CameraService {
       switch (name) {
         case 'flip':
           if (tracks.isEmpty) return reply(false, 'unavailable', 'No active camera');
-          await webrtc.Helper.switchCamera(tracks.first);
+          final isFront = await webrtc.Helper.switchCamera(tracks.first);
+          _facing = isFront ? 'front' : 'back';
+          _publishState();
           return reply(true);
         case 'torch':
           if (tracks.isEmpty) return reply(false, 'unavailable', 'No active camera');
           final on = args is Map && args['on'] == true;
           await tracks.first.setTorch(on);
+          return reply(true);
+        case 'video':
+        case 'audio':
+          // Viewer-requested mute of the outgoing media of the running session.
+          // Only the viewer of the session may cut or restore it.
+          final on = args is Map ? args['on'] : null;
+          if (on is! bool) return reply(false, 'bad_request', 'args.on must be a boolean');
+          if (_sid == null || from != _viewer) {
+            return reply(false, 'unavailable', 'No active session');
+          }
+          final media = name == 'video'
+              ? (_local?.getVideoTracks() ?? const [])
+              : (_local?.getAudioTracks() ?? const []);
+          if (media.isEmpty) {
+            // nothing is sent: cutting is already true, restoring is impossible
+            return on ? reply(false, 'unavailable', 'No $name track') : reply(true);
+          }
+          for (final t in media) {
+            t.enabled = on;
+          }
+          debugPrint('[Camera] $name ${on ? 'resumed' : 'cut'}');
           return reply(true);
         default:
           return reply(false, 'unsupported', 'Unknown command');
